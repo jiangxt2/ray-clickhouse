@@ -1,0 +1,117 @@
+name: ray-clickhouse-cluster-it
+
+x-ray-common: &ray-common
+  image: ray-clickhouse-it-ray:local
+  build:
+    context: ../..
+    dockerfile: docker/ray/Dockerfile
+  environment:
+    RAY_USAGE_STATS_ENABLED: "0"
+    PYTHONPATH: /workspace/ray-clickhouse/src:/workspace/ray-clickhouse/tests
+  networks: [rayclickhouse]
+  shm_size: 1gb
+  mem_limit: 2g
+  ulimits:
+    nofile:
+      soft: 200000
+      hard: 200000
+
+services:
+  clickhouse:
+    image: docker.m.daocloud.io/clickhouse/clickhouse-server@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2
+    environment:
+      CLICKHOUSE_DB: ray_clickhouse_it
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    networks:
+      rayclickhouse:
+        ipv4_address: 10.250.0.20
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: "no"
+
+  ray-head:
+    <<: *ray-common
+    hostname: ray-head
+    mem_limit: 4g
+    networks:
+      rayclickhouse:
+        ipv4_address: 10.250.0.10
+    command:
+      - ray
+      - start
+      - --head
+      - --node-ip-address=10.250.0.10
+      - --port=6379
+      - --object-manager-port=8076
+      - --node-manager-port=8077
+      - --dashboard-host=0.0.0.0
+      - --include-dashboard=true
+      - --object-store-memory=536870912
+      - --num-cpus=0
+      - --block
+
+  ray-worker-1:
+    <<: *ray-common
+    hostname: ray-worker-1
+    depends_on: [ray-head]
+    networks:
+      rayclickhouse:
+        ipv4_address: 10.250.0.11
+    command:
+      - ray
+      - start
+      - --address=ray-head:6379
+      - --node-ip-address=10.250.0.11
+      - --object-manager-port=8076
+      - --node-manager-port=8077
+      - --num-cpus=1
+      - --block
+
+  ray-worker-2:
+    <<: *ray-common
+    hostname: ray-worker-2
+    depends_on: [ray-head]
+    networks:
+      rayclickhouse:
+        ipv4_address: 10.250.0.12
+    command:
+      - ray
+      - start
+      - --address=ray-head:6379
+      - --node-ip-address=10.250.0.12
+      - --object-manager-port=8076
+      - --node-manager-port=8077
+      - --num-cpus=1
+      - --block
+
+  runner:
+    <<: *ray-common
+    hostname: runner
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      ray-worker-1:
+        condition: service_started
+      ray-worker-2:
+        condition: service_started
+    networks:
+      rayclickhouse:
+        ipv4_address: 10.250.0.30
+    environment:
+      RAY_USAGE_STATS_ENABLED: "0"
+      PYTHONPATH: /workspace/ray-clickhouse/src:/workspace/ray-clickhouse/tests
+      RAY_CLICKHOUSE_IT_HOST: clickhouse
+      RAY_CLICKHOUSE_IT_PORT: "8123"
+      RAY_CLICKHOUSE_IT_DATABASE: ray_clickhouse_it
+      RAY_CLICKHOUSE_IT_RAY_ADDRESS: 10.250.0.10:6379
+      RAY_CLICKHOUSE_IT_MIN_NODES: "3"
+    command: ["sleep", "infinity"]
+
+networks:
+  rayclickhouse:
+    ipam:
+      config:
+        - subnet: 10.250.0.0/24
