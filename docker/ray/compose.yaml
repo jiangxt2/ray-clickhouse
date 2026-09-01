@@ -1,10 +1,7 @@
 name: ray-clickhouse-cluster-it
 
 x-ray-common: &ray-common
-  image: ray-clickhouse-it-ray:local
-  build:
-    context: ../..
-    dockerfile: docker/ray/Dockerfile
+  image: ${RAY_CLICKHOUSE_CLUSTER_RUNTIME_IMAGE:-ray-clickhouse-cluster-it-runtime:local}
   environment:
     RAY_USAGE_STATS_ENABLED: "0"
     PYTHONPATH: /workspace/ray-clickhouse/src:/workspace/ray-clickhouse/tests
@@ -18,7 +15,7 @@ x-ray-common: &ray-common
 
 services:
   clickhouse:
-    image: docker.m.daocloud.io/clickhouse/clickhouse-server@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2
+    image: ${RAY_CLICKHOUSE_IT_IMAGE:-docker.m.daocloud.io/clickhouse/clickhouse-server@sha256:9f8fa0d51f86611fda226c4085cdafdddce35312a60c934de2e4450d61fcb99a}
     environment:
       CLICKHOUSE_DB: ray_clickhouse_it
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"

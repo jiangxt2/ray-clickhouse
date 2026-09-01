@@ -107,6 +107,32 @@ jobs:
       - run: .venv/bin/mypy
       - run: .venv/bin/python tools/check_compatibility.py
 
+  clickhouse-it:
+    name: ClickHouse 26.8 integration
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.candidate.outputs.sha }}
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra dev --frozen
+      - name: Run ClickHouse integration
+        run: ./scripts/run_clickhouse_it.sh
+        env:
+          RAY_CLICKHOUSE_IT_ARTIFACT_DIR: artifacts/it
+      - name: Upload ClickHouse integration evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: clickhouse-26.8-integration
+          path: artifacts/it
+          if-no-files-found: error
+
   package-build:
     name: Build package
     needs: candidate

@@ -18,6 +18,9 @@ Distributed reads use one ClickHouse query; ClickHouse owns shard routing.
 
 The read API follows the Ray Data `Datasource`/`ReadTask` contract. The write API uses
 `Dataset.write_datasink()` and does not monkey-patch Ray Dataset methods.
+The package-root public API consists of `read_clickhouse()`, `write_clickhouse()`,
+`WriteReceipt`, and the documented error hierarchy. Datasource and Datasink implementation
+classes are internal and are not independent compatibility promises.
 
 ## Usage
 
@@ -59,6 +62,11 @@ is destructive and must be selected explicitly. For create/overwrite, nullable c
 listed explicitly through `nullable_columns`; timestamp precision is preserved and unsupported
 binary types are rejected.
 
+Writing an empty Dataset is a confirmed no-op: it returns a zero-valued `WriteReceipt` without
+performing ClickHouse discovery, table management, or INSERT. If Ray returns without invoking the
+normal sink completion callback, `write_clickhouse()` raises `WriteError` instead of reporting a
+zero-valued success. MaterializedView reads are not part of the supported capability profile.
+
 ## Compatibility
 
 `ray-clickhouse` supports final Ray releases `>=2.55,<2.59` on Python 3.10–3.13.
@@ -93,3 +101,5 @@ uv run twine check dist/*
 
 ClickHouse and multi-node Ray integration commands remain available in the repository,
 but they are required only when the affected production or infrastructure behavior changes.
+The pinned infrastructure baselines are ClickHouse 26.8.1.2041 and a Ray 2.58.0/Python 3.12
+three-node runtime.

@@ -41,7 +41,7 @@ def _is_mergetree_engine(engine: str) -> bool:
     return engine.endswith("MergeTree") and engine != "Distributed"
 
 
-_SINGLE_QUERY_ENGINES = frozenset({"View", "MaterializedView", "Distributed"})
+_SINGLE_QUERY_ENGINES = frozenset({"View", "Distributed"})
 
 
 @dataclass(frozen=True, repr=False)

@@ -1,6 +1,6 @@
 services:
   clickhouse:
-    image: ${RAY_CLICKHOUSE_IT_IMAGE:-docker.m.daocloud.io/clickhouse/clickhouse-server@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b}
+    image: ${RAY_CLICKHOUSE_IT_IMAGE:-docker.m.daocloud.io/clickhouse/clickhouse-server@sha256:9f8fa0d51f86611fda226c4085cdafdddce35312a60c934de2e4450d61fcb99a}
     environment:
       CLICKHOUSE_DB: ray_clickhouse_it
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"

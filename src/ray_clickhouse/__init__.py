@@ -16,15 +16,11 @@ from ray_clickhouse._errors import (
     WriteError,
 )
 from ray_clickhouse._models import WriteReceipt
-from ray_clickhouse.datasink import ClickHouseDataSink
-from ray_clickhouse.datasource import ClickHouseDatasource
 
 __all__ = [
     "AmbiguousWriteError",
     "AmbiguousTableManagementError",
     "AuthenticationError",
-    "ClickHouseDataSink",
-    "ClickHouseDatasource",
     "ConfigurationError",
     "DiscoveryError",
     "ObjectNotFoundError",

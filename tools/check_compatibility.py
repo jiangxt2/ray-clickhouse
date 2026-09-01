@@ -23,6 +23,10 @@ EXPECTED_PYTHON_RANGE = ">=3.10,<3.14"
 EXPECTED_RAY_RANGE = ">=2.55,<2.59"
 
 _JOB_PATTERN_TEMPLATE = r"(?ms)^  {job}:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)"
+_STEP_PATTERN_TEMPLATE = (
+    r"(?ms)^      - name: {step}\n"
+    r"(?P<body>.*?)(?=^      - (?:name:|run:|uses:)|\Z)"
+)
 _MATRIX_ENTRY_PATTERN = re.compile(
     r'^          - python: "(?P<python>[0-9]+\.[0-9]+)"\s*\n'
     r'^            ray: "(?P<ray>[0-9]+\.[0-9]+\.[0-9]+)"\s*$',
@@ -47,6 +51,11 @@ T = TypeVar("T")
 
 def _job_body(workflow: str, job: str) -> str:
     match = re.search(_JOB_PATTERN_TEMPLATE.format(job=re.escape(job)), workflow)
+    return match.group("body") if match is not None else ""
+
+
+def _named_step_body(job_body: str, step: str) -> str:
+    match = re.search(_STEP_PATTERN_TEMPLATE.format(step=re.escape(step)), job_body)
     return match.group("body") if match is not None else ""
 
 
@@ -176,6 +185,13 @@ def validate_compatibility_texts(
             ".venv/bin/mypy",
             ".venv/bin/python tools/check_compatibility.py",
         ),
+        "clickhouse-it": (
+            "needs: candidate",
+            shared_candidate_ref,
+            "uv sync --extra dev --frozen",
+            "- name: Run ClickHouse integration",
+            "- name: Upload ClickHouse integration evidence",
+        ),
         "package-build": (
             "needs: candidate",
             shared_candidate_ref,
@@ -202,6 +218,30 @@ def validate_compatibility_texts(
             if fragment not in body:
                 errors.append(
                     f"CI {job} job is missing required fragment: {fragment!r}"
+                )
+
+    required_step_fragments = {
+        ("clickhouse-it", "Run ClickHouse integration"): (
+            "run: ./scripts/run_clickhouse_it.sh",
+            "RAY_CLICKHOUSE_IT_ARTIFACT_DIR: artifacts/it",
+        ),
+        ("clickhouse-it", "Upload ClickHouse integration evidence"): (
+            "if: always()",
+            "uses: actions/upload-artifact@",
+            "name: clickhouse-26.8-integration",
+            "path: artifacts/it",
+            "if-no-files-found: error",
+        ),
+    }
+    for (job, step), fragments in required_step_fragments.items():
+        body = _named_step_body(_job_body(workflow, job), step)
+        if not body:
+            errors.append(f"CI {job} job is missing required step: {step!r}")
+            continue
+        for fragment in fragments:
+            if fragment not in body:
+                errors.append(
+                    f"CI {job} step {step!r} is missing required fragment: {fragment!r}"
                 )
 
     if re.search(r"(?m)^\s+paths(?:-ignore)?:", workflow):

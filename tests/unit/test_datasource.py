@@ -4,7 +4,7 @@ import pyarrow as pa
 import pytest
 
 from ray_clickhouse._discovery import PartitionInfo, RangeFacts
-from ray_clickhouse._errors import ConfigurationError, PermissionError
+from ray_clickhouse._errors import ConfigurationError, DiscoveryError, PermissionError
 from ray_clickhouse._models import ClickHouseConnection, QualifiedTable, ResourceLimits
 from ray_clickhouse._schema import SchemaPlan, TargetColumn
 from ray_clickhouse.datasource import ClickHouseDatasource, ClickHouseReadConfig
@@ -81,6 +81,20 @@ def test_single_read_supports_view_engine_and_order_by():
 
     query = _query_from_read_fn(make_task.call_args.args[0])
     assert query.sql.endswith("ORDER BY `id` DESC")
+
+
+def test_single_read_rejects_materialized_view_engine():
+    with (
+        patch("ray_clickhouse.datasource.ensure_supported_ray_version"),
+        patch("ray_clickhouse.datasource.discover_schema", return_value=_schema_plan()),
+        patch(
+            "ray_clickhouse.datasource.discover_engine",
+            return_value="MaterializedView",
+        ),
+    ):
+        source = ClickHouseDatasource(_config())
+        with pytest.raises(DiscoveryError, match="MaterializedView.*unsupported"):
+            source.get_read_tasks(parallelism=1)
 
 
 def test_order_by_requires_single_split():

@@ -8,6 +8,7 @@ from typing import Any
 import ray.data
 
 from ray_clickhouse._compat import ensure_supported_ray_version
+from ray_clickhouse._errors import WriteError
 from ray_clickhouse._models import (
     ClickHouseConnection,
     DiscoveryPolicy,
@@ -195,4 +196,7 @@ def write_clickhouse(
     if concurrency is not None:
         kwargs["concurrency"] = concurrency
     dataset.write_datasink(sink, **kwargs)
-    return sink.receipt or WriteReceipt(0, 0, 0)
+    receipt = sink.receipt
+    if receipt is None:
+        raise WriteError("Ray write completed without a ClickHouse write receipt")
+    return receipt

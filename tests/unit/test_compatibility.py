@@ -22,6 +22,14 @@ def _repository_texts() -> tuple[str, str, str, str]:
     )
 
 
+def _replace_clickhouse_job_fragment(workflow: str, old: str, new: str) -> str:
+    start = workflow.index("  clickhouse-it:\n")
+    end = workflow.index("  package-build:\n", start)
+    job = workflow[start:end]
+    assert old in job
+    return workflow[:start] + job.replace(old, new, 1) + workflow[end:]
+
+
 def test_repository_compatibility_contracts_match() -> None:
     assert run_checks() == []
 
@@ -147,6 +155,77 @@ def test_compatibility_checker_rejects_command_moved_to_wrong_job(
     assert target_anchor in workflow
     workflow = workflow.replace(source_anchor, "", 1)
     workflow = workflow.replace(target_anchor, target_anchor + fragment, 1)
+
+    errors = validate_compatibility_texts(
+        workflow, readme, pyproject, compatibility_module
+    )
+
+    assert any(expected in error for error in errors)
+
+
+def test_compatibility_checker_requires_clickhouse_integration_job() -> None:
+    workflow, readme, pyproject, compatibility_module = _repository_texts()
+    workflow = workflow.replace("  clickhouse-it:\n", "  optional-clickhouse-it:\n", 1)
+
+    errors = validate_compatibility_texts(
+        workflow, readme, pyproject, compatibility_module
+    )
+
+    assert "CI workflow is missing required job: 'clickhouse-it'" in errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected"),
+    (
+        ("needs: candidate", "needs: []", "clickhouse-it job"),
+        (
+            "ref: ${{ needs.candidate.outputs.sha }}",
+            "ref: ${{ github.sha }}",
+            "clickhouse-it job",
+        ),
+        (
+            "uv sync --extra dev --frozen",
+            "uv sync --extra dev",
+            "clickhouse-it job",
+        ),
+        (
+            "run: ./scripts/run_clickhouse_it.sh",
+            "run: echo integration-disabled",
+            "Run ClickHouse integration",
+        ),
+        (
+            "RAY_CLICKHOUSE_IT_ARTIFACT_DIR: artifacts/it",
+            "RAY_CLICKHOUSE_IT_ARTIFACT_DIR: .artifacts/it",
+            "Run ClickHouse integration",
+        ),
+        ("if: always()", "if: success()", "Upload ClickHouse integration evidence"),
+        (
+            "uses: actions/upload-artifact@",
+            "uses: actions/download-artifact@",
+            "Upload ClickHouse integration evidence",
+        ),
+        (
+            "name: clickhouse-26.8-integration",
+            "name: clickhouse-integration",
+            "Upload ClickHouse integration evidence",
+        ),
+        (
+            "path: artifacts/it",
+            "path: .artifacts/it",
+            "Upload ClickHouse integration evidence",
+        ),
+        (
+            "if-no-files-found: error",
+            "if-no-files-found: warn",
+            "Upload ClickHouse integration evidence",
+        ),
+    ),
+)
+def test_compatibility_checker_rejects_clickhouse_job_drift(
+    old: str, new: str, expected: str
+) -> None:
+    workflow, readme, pyproject, compatibility_module = _repository_texts()
+    workflow = _replace_clickhouse_job_fragment(workflow, old, new)
 
     errors = validate_compatibility_texts(
         workflow, readme, pyproject, compatibility_module

@@ -5,7 +5,8 @@ import pyarrow as pa
 import pytest
 import ray.data
 
-from ray_clickhouse import read_clickhouse, write_clickhouse
+import ray_clickhouse
+from ray_clickhouse import WriteError, read_clickhouse, write_clickhouse
 from ray_clickhouse._models import WriteReceipt
 from ray_clickhouse.datasink import ClickHouseDataSink
 from ray_clickhouse.datasource import ClickHouseDatasource
@@ -95,7 +96,36 @@ def test_write_facade_uses_ray_datasink_and_returns_receipt() -> None:
     )
 
 
-def test_public_components_are_arrow_and_ray_contracts() -> None:
+def test_write_facade_fails_if_ray_does_not_complete_the_sink() -> None:
+    dataset = MagicMock(spec=ray.data.Dataset)
+    sink = MagicMock(spec=ClickHouseDataSink)
+    sink.receipt = None
+    with (
+        patch("ray_clickhouse._api.ClickHouseDataSink", return_value=sink),
+        patch("ray_clickhouse._api.ensure_supported_ray_version"),
+        pytest.raises(WriteError, match="without a ClickHouse write receipt"),
+    ):
+        write_clickhouse(
+            dataset,
+            host="clickhouse",
+            database="analytics",
+            table="events",
+        )
+
+    dataset.write_datasink.assert_called_once_with(
+        sink,
+        ray_remote_args={"max_retries": 0},
+    )
+
+
+def test_package_root_exports_only_supported_public_components() -> None:
+    assert "ClickHouseDatasource" not in ray_clickhouse.__all__
+    assert "ClickHouseDataSink" not in ray_clickhouse.__all__
+    assert not hasattr(ray_clickhouse, "ClickHouseDatasource")
+    assert not hasattr(ray_clickhouse, "ClickHouseDataSink")
+
+
+def test_internal_components_follow_arrow_and_ray_contracts() -> None:
     assert issubclass(ClickHouseDatasource, ray.data.datasource.Datasource)
     assert issubclass(ClickHouseDataSink, ray.data.datasource.Datasink)
     assert pa.schema([("id", pa.uint64())]).names == ["id"]

@@ -19,7 +19,9 @@ from ray.data.datasource import (  # noqa: E402
     WriteResult,
 )
 
+from ray_clickhouse import write_clickhouse  # noqa: E402
 from ray_clickhouse._compat import make_read_task  # noqa: E402
+from ray_clickhouse._models import WriteReceipt  # noqa: E402
 
 pytestmark = pytest.mark.ray
 
@@ -119,3 +121,18 @@ def test_public_write_datasink_completes_empty_dataset() -> None:
     assert sink.starts == []
     assert sink.completed is not None
     assert sink.completed.write_returns == []
+
+
+@pytest.mark.parametrize("write_mode", ["append", "create", "overwrite"])
+def test_write_facade_returns_confirmed_zero_receipt_for_empty_dataset(
+    write_mode: str,
+) -> None:
+    receipt = write_clickhouse(
+        ray.data.range(0),
+        host="unused",
+        database="analytics",
+        table="events",
+        write_mode=write_mode,
+    )
+
+    assert receipt == WriteReceipt(0, 0, 0)

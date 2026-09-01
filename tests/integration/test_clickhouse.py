@@ -87,6 +87,14 @@ def _create_aggregate_view(client: Any, view: str, source: str) -> None:
     )
 
 
+def _create_materialized_view(client: Any, view: str, source: str) -> None:
+    client.command(
+        f"CREATE MATERIALIZED VIEW `{DATABASE}`.`{view}` "
+        "ENGINE = MergeTree ORDER BY id AS "
+        f"SELECT id, tenant_id, payload FROM `{DATABASE}`.`{source}`"
+    )
+
+
 def _create_distributed_table(client: Any, table: str, source: str) -> bool:
     clusters = client.query(
         "SELECT cluster FROM system.clusters WHERE shard_num = 1 LIMIT 1"
@@ -222,6 +230,28 @@ def test_view_and_aggregate_view_are_readable_only_as_single_queries(
         clickhouse_client.command(f"DROP VIEW IF EXISTS `{DATABASE}`.`{view}`")
         clickhouse_client.command(
             f"DROP VIEW IF EXISTS `{DATABASE}`.`{aggregate_view}`"
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.ray
+def test_materialized_view_is_outside_the_read_capability_profile(
+    clickhouse_client: Any, table_name: str, connection_options: dict[str, object]
+) -> None:
+    _create_events_table(clickhouse_client, table_name)
+    materialized_view = f"{table_name}_materialized"
+    _create_materialized_view(clickhouse_client, materialized_view, table_name)
+    try:
+        with pytest.raises(DiscoveryError, match="MaterializedView.*unsupported"):
+            _read_rows(
+                **connection_options,
+                table=materialized_view,
+                columns=("id",),
+                split="single",
+            )
+    finally:
+        clickhouse_client.command(
+            f"DROP TABLE IF EXISTS `{DATABASE}`.`{materialized_view}`"
         )
 
 
