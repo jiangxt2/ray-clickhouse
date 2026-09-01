@@ -441,7 +441,7 @@ jobs:
       - name: Record promotion receipt identity
         env:
           RECEIPT_ID: ${{ steps.upload-receipt.outputs.artifact-id }}
-          RECEIPT_DIGEST: ${{ steps.upload-receipt.outputs.artifact-digest }}
+          RECEIPT_DIGEST: sha256:${{ steps.upload-receipt.outputs.artifact-digest }}
           RECEIPT_URL: ${{ steps.upload-receipt.outputs.artifact-url }}
         run: |
           {
@@ -585,7 +585,7 @@ jobs:
       - name: Record promotion receipt identity
         env:
           RECEIPT_ID: ${{ steps.upload-receipt.outputs.artifact-id }}
-          RECEIPT_DIGEST: ${{ steps.upload-receipt.outputs.artifact-digest }}
+          RECEIPT_DIGEST: sha256:${{ steps.upload-receipt.outputs.artifact-digest }}
           RECEIPT_URL: ${{ steps.upload-receipt.outputs.artifact-url }}
         run: |
           {
@@ -694,7 +694,7 @@ jobs:
       - name: Record promotion receipt identity
         env:
           RECEIPT_ID: ${{ steps.upload-receipt.outputs.artifact-id }}
-          RECEIPT_DIGEST: ${{ steps.upload-receipt.outputs.artifact-digest }}
+          RECEIPT_DIGEST: sha256:${{ steps.upload-receipt.outputs.artifact-digest }}
           RECEIPT_URL: ${{ steps.upload-receipt.outputs.artifact-url }}
         run: |
           {
@@ -818,7 +818,7 @@ jobs:
       - name: Record promotion receipt identity
         env:
           RECEIPT_ID: ${{ steps.upload-receipt.outputs.artifact-id }}
-          RECEIPT_DIGEST: ${{ steps.upload-receipt.outputs.artifact-digest }}
+          RECEIPT_DIGEST: sha256:${{ steps.upload-receipt.outputs.artifact-digest }}
           RECEIPT_URL: ${{ steps.upload-receipt.outputs.artifact-url }}
         run: |
           {
@@ -934,7 +934,7 @@ jobs:
       - name: Record promotion receipt identity
         env:
           RECEIPT_ID: ${{ steps.upload-receipt.outputs.artifact-id }}
-          RECEIPT_DIGEST: ${{ steps.upload-receipt.outputs.artifact-digest }}
+          RECEIPT_DIGEST: sha256:${{ steps.upload-receipt.outputs.artifact-digest }}
           RECEIPT_URL: ${{ steps.upload-receipt.outputs.artifact-url }}
         run: |
           {

@@ -286,6 +286,21 @@ def test_compatibility_checker_rejects_package_build_release_privilege() -> None
     assert any("must not receive release privilege" in error for error in errors)
 
 
+def test_compatibility_checker_rejects_bare_artifact_digest_output() -> None:
+    workflow, readme, pyproject, compatibility_module = _repository_texts()
+    workflow = workflow.replace(
+        "artifact-digest: sha256:${{ steps.upload-evidence.outputs.artifact-digest }}",
+        "artifact-digest: ${{ steps.upload-evidence.outputs.artifact-digest }}",
+        1,
+    )
+
+    errors = validate_compatibility_texts(
+        workflow, readme, pyproject, compatibility_module
+    )
+
+    assert any("sha256 prefixes" in error for error in errors)
+
+
 def test_compatibility_checker_rejects_path_filters() -> None:
     workflow, readme, pyproject, compatibility_module = _repository_texts()
     workflow = workflow.replace(

@@ -207,7 +207,8 @@ def validate_compatibility_texts(
             "uv sync --extra dev --frozen",
             "outputs:",
             "artifact-id: ${{ steps.upload-evidence.outputs.artifact-id }}",
-            "artifact-digest: ${{ steps.upload-evidence.outputs.artifact-digest }}",
+            "artifact-digest: sha256:"
+            "${{ steps.upload-evidence.outputs.artifact-digest }}",
             "- name: Run ClickHouse integration",
             "- name: Upload ClickHouse integration evidence",
         ),
@@ -220,7 +221,7 @@ def validate_compatibility_texts(
             ".venv/bin/twine check dist/*.whl dist/*.tar.gz",
             "sha256sum -- *.whl *.tar.gz > SHA256SUMS",
             "artifact-id: ${{ steps.upload-distributions.outputs.artifact-id }}",
-            "artifact-digest: "
+            "artifact-digest: sha256:"
             "${{ steps.upload-distributions.outputs.artifact-digest }}",
             "actions/upload-artifact@",
         ),
@@ -258,6 +259,9 @@ def validate_compatibility_texts(
             '--evidence-id "${EVIDENCE_ID}"',
             "name: release-candidate-record",
             "if-no-files-found: error",
+            "artifact-digest: sha256:"
+            "${{ steps.upload-record.outputs.artifact-digest }}",
+            "RECORD_DIGEST: sha256:${{ steps.upload-record.outputs.artifact-digest }}",
         ),
     }
     for job, fragments in required_job_fragments.items():
@@ -320,6 +324,9 @@ def validate_compatibility_texts(
                 "CI package-build job must not receive release privilege: "
                 f"{forbidden!r}"
             )
+
+    if workflow.count("artifact-digest: sha256:${{") != 3:
+        errors.append("CI artifact digest outputs must all use sha256 prefixes")
 
     if re.search(r"(?m)^\s+paths(?:-ignore)?:", workflow):
         errors.append("CI workflow must not use path filters")

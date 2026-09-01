@@ -573,6 +573,7 @@ def validate_release_texts(
         "refs/tags/v0.1.0^{}",
         "promotion-receipt.json",
         "Record promotion receipt identity",
+        "RECEIPT_DIGEST: sha256:${{ steps.upload-receipt.outputs.artifact-digest }}",
         "workflow_dispatch",
         ".github/workflows/release.yml",
         "candidate-source/tools/check_release.py",
@@ -602,6 +603,8 @@ def validate_release_texts(
         errors.append(
             "every release artifact download must use an immutable artifact ID"
         )
+    if release_workflow.count("RECEIPT_DIGEST: sha256:${{") != len(OPERATIONS):
+        errors.append("every promotion receipt digest output must use a sha256 prefix")
     for forbidden in (
         "artifact-metadata: write",
         "push-to-registry",
@@ -631,6 +634,7 @@ def validate_release_texts(
         "id-token: write",
         "attestations: write",
         "if-no-files-found: error",
+        "RECORD_DIGEST: sha256:${{ steps.upload-record.outputs.artifact-digest }}",
     )
     for fragment in ci_fragments:
         if fragment not in ci_workflow:

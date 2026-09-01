@@ -423,6 +423,12 @@ def test_clickhouse_evidence_requires_passing_junit_and_logs(tmp_path: Path) -> 
     (
         (0, "candidate-record:", "candidate-record-disabled:", "candidate-record"),
         (0, "subject-checksums:", "subject-path:", "subject-checksums"),
+        (
+            0,
+            "RECORD_DIGEST: sha256:${{ steps.upload-record.outputs.artifact-digest }}",
+            "RECORD_DIGEST: ${{ steps.upload-record.outputs.artifact-digest }}",
+            "RECORD_DIGEST",
+        ),
         (1, "- github-release", "- publish-all", "github-release"),
         (
             1,
@@ -431,6 +437,13 @@ def test_clickhouse_evidence_requires_passing_junit_and_logs(tmp_path: Path) -> 
             "exclusive job condition",
         ),
         (1, "digest-mismatch: error", "digest-mismatch: warn", "digest-mismatch"),
+        (
+            1,
+            "RECEIPT_DIGEST: sha256:"
+            "${{ steps.upload-receipt.outputs.artifact-digest }}",
+            "RECEIPT_DIGEST: ${{ steps.upload-receipt.outputs.artifact-digest }}",
+            "sha256 prefix",
+        ),
         (
             1,
             "--source-ref refs/heads/master",
