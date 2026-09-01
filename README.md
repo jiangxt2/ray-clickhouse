@@ -59,11 +59,37 @@ is destructive and must be selected explicitly. For create/overwrite, nullable c
 listed explicitly through `nullable_columns`; timestamp precision is preserved and unsupported
 binary types are rejected.
 
+## Compatibility
+
+`ray-clickhouse` supports final Ray releases `>=2.55,<2.59` on Python 3.10–3.13.
+Prerelease, development, and post-release Ray builds are rejected. PEP 440 local build
+suffixes are allowed. Pandas is resolved through `ray[data]`; it is not an independent
+`ray-clickhouse` compatibility promise.
+
+| Python | Ray | Verification |
+| --- | --- | --- |
+| 3.12 | 2.55.0 | Unit and public-contract tests |
+| 3.12 | 2.56.1 | Unit and public-contract tests |
+| 3.12 | 2.57.0 | Unit and public-contract tests |
+| 3.12 | 2.58.0 | Unit, public-contract, and package tests |
+| 3.10 | 2.58.0 | Unit, public-contract, and wheel tests |
+| 3.11 | 2.58.0 | Unit, public-contract, and wheel tests |
+| 3.13 | 2.58.0 | Unit, public-contract, and wheel tests |
+
 ## Development
 
 ```bash
 uv sync --extra dev
+uv run ruff format --check .
+uv run ruff check .
+uv run mypy
+uv run python tools/check_compatibility.py
 uv run pytest tests/unit tests/contract
+uv build
+uv run twine check dist/*
 ./scripts/run_clickhouse_it.sh
 ./scripts/run_ray_cluster_it.sh
 ```
+
+ClickHouse and multi-node Ray integration commands remain available in the repository,
+but they are required only when the affected production or infrastructure behavior changes.

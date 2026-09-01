@@ -128,7 +128,8 @@ def read_clickhouse(
         kwargs["num_gpus"] = num_gpus
     if memory is not None:
         kwargs["memory"] = memory
-    return ray.data.read_datasource(datasource, **kwargs)
+    dataset: ray.data.Dataset = ray.data.read_datasource(datasource, **kwargs)
+    return dataset
 
 
 def write_clickhouse(

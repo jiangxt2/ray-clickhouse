@@ -1,0 +1,168 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from tools.check_compatibility import run_checks, validate_compatibility_texts
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _repository_texts() -> tuple[str, str, str, str]:
+    return (
+        (REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        ),
+        (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8"),
+        (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8"),
+        (REPOSITORY_ROOT / "src" / "ray_clickhouse" / "_compat.py").read_text(
+            encoding="utf-8"
+        ),
+    )
+
+
+def test_repository_compatibility_contracts_match() -> None:
+    assert run_checks() == []
+
+
+@pytest.mark.parametrize(
+    ("source_index", "old", "new", "expected"),
+    (
+        (0, 'ray: "2.56.1"', 'ray: "2.56.0"', "CI unit matrix"),
+        (
+            0,
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "actions/checkout@v7",
+            "full SHA",
+        ),
+        (1, "| 3.11 | 2.58.0 |", "| 3.14 | 2.58.0 |", "README matrix"),
+        (2, '"ray[data]>=2.55,<2.59"', '"ray[data]>=2.55,<2.60"', "Ray dependency"),
+        (
+            2,
+            '"Programming Language :: Python :: 3.13"',
+            '"Programming Language :: Python :: 3.14"',
+            "Python classifiers",
+        ),
+        (3, "_MAX_RAY = (2, 59, 0)", "_MAX_RAY = (2, 60, 0)", "maximum Ray version"),
+    ),
+)
+def test_compatibility_checker_rejects_drift(
+    source_index: int, old: str, new: str, expected: str
+) -> None:
+    sources = list(_repository_texts())
+    assert old in sources[source_index]
+    sources[source_index] = sources[source_index].replace(old, new, 1)
+
+    errors = validate_compatibility_texts(*sources)
+
+    assert any(expected in error for error in errors)
+
+
+def test_compatibility_checker_rejects_package_python_drift() -> None:
+    workflow, readme, pyproject, compatibility_module = _repository_texts()
+    prefix, package_job = workflow.split("  package-smoke:\n", 1)
+    assert '- python: "3.11"' in package_job
+    package_job = package_job.replace('- python: "3.11"', '- python: "3.14"', 1)
+
+    errors = validate_compatibility_texts(
+        prefix + "  package-smoke:\n" + package_job,
+        readme,
+        pyproject,
+        compatibility_module,
+    )
+
+    assert any("package Python matrix" in error for error in errors)
+
+
+def test_compatibility_checker_rejects_extra_python_classifier() -> None:
+    workflow, readme, pyproject, compatibility_module = _repository_texts()
+    pyproject = pyproject.replace(
+        '    "Programming Language :: Python :: 3.13",\n',
+        '    "Programming Language :: Python :: 3.13",\n'
+        '    "Programming Language :: Python :: 3.14",\n',
+    )
+
+    errors = validate_compatibility_texts(
+        workflow, readme, pyproject, compatibility_module
+    )
+
+    assert any("Python classifiers" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected"),
+    (
+        ("^[0-9a-f]{40}$", "^[0-9a-f]{7,40}$", "candidate job"),
+        (
+            "ref: ${{ needs.candidate.outputs.sha }}",
+            "ref: ${{ inputs.candidate_sha || github.sha }}",
+            "unit job",
+        ),
+        ("needs: candidate", "needs: []", "unit job"),
+    ),
+)
+def test_compatibility_checker_rejects_mutable_candidate_policy(
+    old: str, new: str, expected: str
+) -> None:
+    workflow, readme, pyproject, compatibility_module = _repository_texts()
+    assert old in workflow
+    workflow = workflow.replace(old, new, 1)
+
+    errors = validate_compatibility_texts(
+        workflow, readme, pyproject, compatibility_module
+    )
+
+    assert any(expected in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("fragment", "source_anchor", "target_anchor", "expected"),
+    (
+        (
+            "      - run: .venv/bin/mypy\n",
+            "      - run: .venv/bin/mypy\n",
+            "      - run: .venv/bin/python -m build\n",
+            "quality job",
+        ),
+        (
+            "      - run: .venv/bin/python -m build\n",
+            "      - run: .venv/bin/python -m build\n",
+            "      - run: .venv/bin/mypy\n",
+            "package-build job",
+        ),
+        (
+            ".venv/bin/python -m pytest tests/unit tests/contract",
+            ".venv/bin/python -m pytest tests/unit tests/contract",
+            "      - run: .venv/bin/python -m build\n",
+            "unit job",
+        ),
+    ),
+)
+def test_compatibility_checker_rejects_command_moved_to_wrong_job(
+    fragment: str, source_anchor: str, target_anchor: str, expected: str
+) -> None:
+    workflow, readme, pyproject, compatibility_module = _repository_texts()
+    assert source_anchor in workflow
+    assert target_anchor in workflow
+    workflow = workflow.replace(source_anchor, "", 1)
+    workflow = workflow.replace(target_anchor, target_anchor + fragment, 1)
+
+    errors = validate_compatibility_texts(
+        workflow, readme, pyproject, compatibility_module
+    )
+
+    assert any(expected in error for error in errors)
+
+
+def test_compatibility_checker_rejects_path_filters() -> None:
+    workflow, readme, pyproject, compatibility_module = _repository_texts()
+    workflow = workflow.replace(
+        "  pull_request:\n", "  pull_request:\n    paths:\n      - src/**\n"
+    )
+
+    errors = validate_compatibility_texts(
+        workflow, readme, pyproject, compatibility_module
+    )
+
+    assert "CI workflow must not use path filters" in errors

@@ -6,18 +6,31 @@ readme = "README.md"
 requires-python = ">=3.10,<3.14"
 license = {text = "Apache-2.0"}
 authors = [{name = "jiangxt2"}]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
 dependencies = [
     "clickhouse-connect[arrow]>=1.5,<1.6",
     "pyarrow>=19,<20",
-    "ray[data]>=2.55,<2.56",
+    "ray[data]>=2.55,<2.59",
     "typing-extensions>=4.12,<5",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "build>=1.2.2,<2",
+    "mypy>=1.17,<2",
+    "pyarrow-stubs>=19,<20",
     "pytest>=8.3,<10",
     "pytest-cov>=6,<8",
-    "ruff>=0.12.8,<1",
+    "pytest-timeout>=2.3,<3",
+    "ruff==0.16.4",
+    "twine>=7,<8",
 ]
 
 [build-system]
@@ -45,3 +58,8 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["ray_clickhouse"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["ray_clickhouse"]

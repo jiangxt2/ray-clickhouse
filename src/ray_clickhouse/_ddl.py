@@ -94,7 +94,9 @@ def _arrow_type(dtype: pa.DataType) -> str:
     raise SchemaError(f"Arrow type {dtype} cannot be mapped to ClickHouse safely")
 
 
-def _arrow_field_type(field: pa.Field, *, nullable: bool | None = None) -> str:
+def _arrow_field_type(
+    field: pa.Field[pa.DataType], *, nullable: bool | None = None
+) -> str:
     value = _arrow_type(field.type)
     if nullable is None:
         nullable = field.nullable
@@ -110,7 +112,7 @@ def _default_order_by(schema: pa.Schema) -> tuple[str, ...]:
             field.type
         ):
             return (field.name,)
-    return (schema[0].name,)
+    return (schema.field(0).name,)
 
 
 def _render_order_by(columns: Sequence[str]) -> str:

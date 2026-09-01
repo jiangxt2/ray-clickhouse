@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import pyarrow as pa
@@ -107,7 +107,7 @@ class ClickHouseDataSink(Datasink[dict[str, object]]):
                 schema, self._target, self._columns
             )
 
-    def write(self, blocks: Iterator[Any], ctx: Any) -> dict[str, object]:
+    def write(self, blocks: Iterable[Any], ctx: Any) -> dict[str, object]:
         del ctx
         if self._target is None:
             raise ConfigurationError(

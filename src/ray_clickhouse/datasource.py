@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 from ray.data.block import BlockMetadata
@@ -12,6 +13,8 @@ from ray.data.datasource import Datasource, ReadTask
 from ray_clickhouse._compat import ensure_supported_ray_version, make_read_task
 from ray_clickhouse._discovery import (
     DiscoverySnapshot,
+    PartitionInfo,
+    RangeFacts,
     discover_engine,
     discover_partitions,
     discover_range_facts,
@@ -91,7 +94,8 @@ class ClickHouseDatasource(Datasource):
 
     def __init__(self, config: ClickHouseReadConfig) -> None:
         ensure_supported_ray_version()
-        super().__init__()
+        initialize_datasource = cast(Callable[[], None], super().__init__)
+        initialize_datasource()
         self._config = config
         self._planning_snapshot: DiscoverySnapshot | None = None
 
@@ -121,8 +125,8 @@ class ClickHouseDatasource(Datasource):
                 f"split={config.split!r}; "
                 "use a direct table with split='single'"
             )
-        partitions = ()
-        range_facts = None
+        partitions: tuple[PartitionInfo, ...] = ()
+        range_facts: RangeFacts | None = None
         if config.split == "partition":
             try:
                 partitions = discover_partitions(

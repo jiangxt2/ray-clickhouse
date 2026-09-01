@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -159,24 +159,24 @@ def _transport_type_expression(value: str) -> str:
     if parsed.name == "Map":
         if len(parsed.arguments) != 2:
             raise SchemaError(f"invalid ClickHouse type: {value!r}")
-        arguments = ", ".join(
+        rendered_arguments = ", ".join(
             _transport_type_expression(argument) for argument in parsed.arguments
         )
-        return f"Map({arguments})"
+        return f"Map({rendered_arguments})"
     if parsed.name == "Tuple":
         if not parsed.arguments:
             raise SchemaError(f"invalid ClickHouse type: {value!r}")
-        arguments = []
+        rendered_arguments_list: list[str] = []
         for argument in parsed.arguments:
             match = _TUPLE_FIELD.fullmatch(argument)
             if match is None:
-                arguments.append(_transport_type_expression(argument))
+                rendered_arguments_list.append(_transport_type_expression(argument))
             else:
-                arguments.append(
+                rendered_arguments_list.append(
                     f"{match.group('name')} "
                     f"{_transport_type_expression(match.group('type'))}"
                 )
-        return f"Tuple({', '.join(arguments)})"
+        return f"Tuple({', '.join(rendered_arguments_list)})"
     if parsed.name == "SimpleAggregateFunction" and len(parsed.arguments) == 2:
         return (
             f"SimpleAggregateFunction({parsed.arguments[0]}, "
@@ -284,7 +284,7 @@ def arrow_compatible(dtype: pa.DataType, declared_type: str) -> bool:
         "FixedString",
     }:
         return bool(pa.types.is_string(dtype) or pa.types.is_binary(dtype))
-    integer_types = {
+    integer_types: dict[str, Callable[[pa.DataType], bool]] = {
         "Int8": pa.types.is_int8,
         "Int16": pa.types.is_int16,
         "Int32": pa.types.is_int32,
@@ -320,7 +320,7 @@ def arrow_compatible(dtype: pa.DataType, declared_type: str) -> bool:
             precision, scale = (int(argument) for argument in parsed.arguments)
         except (TypeError, ValueError):
             return False
-        return dtype.precision == precision and dtype.scale == scale
+        return bool(dtype.precision == precision and dtype.scale == scale)
     if parsed.name == "Array" and len(parsed.arguments) == 1:
         return bool(
             (pa.types.is_list(dtype) or pa.types.is_large_list(dtype))
