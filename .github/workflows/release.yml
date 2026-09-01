@@ -1,0 +1,945 @@
+name: Release promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Exactly one release promotion operation
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - testpypi
+          - release-tag
+          - pypi
+          - github-release
+      source_run_id:
+        description: Master-push CI run that produced the candidate
+        required: true
+        type: string
+      candidate_record_artifact_id:
+        description: Candidate descriptor artifact ID
+        required: true
+        type: string
+      candidate_record_artifact_digest:
+        description: Candidate descriptor artifact sha256 digest
+        required: true
+        type: string
+      predecessor_run_id:
+        description: Immediately preceding successful promotion run ID
+        required: false
+        type: string
+      predecessor_receipt_artifact_id:
+        description: Immediately preceding promotion receipt artifact ID
+        required: false
+        type: string
+      predecessor_receipt_artifact_digest:
+        description: Immediately preceding promotion receipt artifact digest
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  attestations: read
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.candidate_record_artifact_id }}-${{ inputs.operation }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate immutable candidate and predecessor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      candidate-sha: ${{ steps.record.outputs.candidate-sha }}
+      distribution-id: ${{ steps.record.outputs.distribution-id }}
+      distribution-digest: ${{ steps.record.outputs.distribution-digest }}
+      evidence-id: ${{ steps.record.outputs.evidence-id }}
+      evidence-digest: ${{ steps.record.outputs.evidence-digest }}
+      validated-input-id: ${{ steps.upload-validated.outputs.artifact-id }}
+    steps:
+      - name: Validate dispatch input shape
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          RECORD_ID: ${{ inputs.candidate_record_artifact_id }}
+          RECORD_DIGEST: ${{ inputs.candidate_record_artifact_digest }}
+          PREDECESSOR_RUN_ID: ${{ inputs.predecessor_run_id }}
+          PREDECESSOR_ID: ${{ inputs.predecessor_receipt_artifact_id }}
+          PREDECESSOR_DIGEST: ${{ inputs.predecessor_receipt_artifact_digest }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          test "${GITHUB_REF}" = "refs/heads/master"
+          test "${WORKFLOW_REF}" = \
+            "jiangxt2/ray-clickhouse/.github/workflows/release.yml@refs/heads/master"
+          [[ "${SOURCE_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+          test "${SOURCE_RUN_ID}" != "${GITHUB_RUN_ID}"
+          [[ "${RECORD_ID}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${RECORD_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          if [[ "${OPERATION}" == "dry-run" ]]; then
+            test -z "${PREDECESSOR_RUN_ID}"
+            test -z "${PREDECESSOR_ID}"
+            test -z "${PREDECESSOR_DIGEST}"
+          else
+            [[ "${PREDECESSOR_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+            [[ "${PREDECESSOR_ID}" =~ ^[1-9][0-9]*$ ]]
+            [[ "${PREDECESSOR_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            test "${PREDECESSOR_RUN_ID}" != "${SOURCE_RUN_ID}"
+            test "${PREDECESSOR_RUN_ID}" != "${GITHUB_RUN_ID}"
+            test "${PREDECESSOR_ID}" != "${RECORD_ID}"
+          fi
+      - name: Verify source CI run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" > source-run.json
+          test "$(jq -r '.event' source-run.json)" = "push"
+          test "$(jq -r '.head_branch' source-run.json)" = "master"
+          test "$(jq -r '.head_repository.full_name' source-run.json)" = \
+            "${GITHUB_REPOSITORY}"
+          test "$(jq -r '.path | split("@")[0]' source-run.json)" = \
+            ".github/workflows/ci.yml"
+          test "$(jq -r '.status' source-run.json)" = "completed"
+          test "$(jq -r '.conclusion' source-run.json)" = "success"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/jobs?per_page=100" \
+            > source-jobs.json
+          expected_jobs=(
+            "Resolve candidate commit"
+            "Python 3.12 / Ray 2.55.0"
+            "Python 3.12 / Ray 2.56.1"
+            "Python 3.12 / Ray 2.57.0"
+            "Python 3.12 / Ray 2.58.0"
+            "Python 3.10 / Ray 2.58.0"
+            "Python 3.11 / Ray 2.58.0"
+            "Python 3.13 / Ray 2.58.0"
+            "Static quality"
+            "Documentation"
+            "Documentation links"
+            "ClickHouse 26.8 integration"
+            "Build package"
+            "Python 3.10 package smoke"
+            "Python 3.11 package smoke"
+            "Python 3.12 package smoke"
+            "Python 3.13 package smoke"
+            "Record release candidate"
+          )
+          for job in "${expected_jobs[@]}"; do
+            jq -e --arg job "${job}" \
+              '[.jobs[] | select(.name == $job and .conclusion == "success")] | length == 1' \
+              source-jobs.json >/dev/null
+          done
+      - name: Verify candidate descriptor artifact API identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          RECORD_ID: ${{ inputs.candidate_record_artifact_id }}
+          RECORD_DIGEST: ${{ inputs.candidate_record_artifact_digest }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${RECORD_ID}" > record-artifact.json
+          test "$(jq -r '.name' record-artifact.json)" = "release-candidate-record"
+          test "$(jq -r '.size_in_bytes > 0' record-artifact.json)" = "true"
+          test "$(jq -r '.expired' record-artifact.json)" = "false"
+          test "$(jq -r '.workflow_run.id' record-artifact.json)" = "${SOURCE_RUN_ID}"
+          test "$(jq -r '.digest' record-artifact.json)" = "${RECORD_DIGEST}"
+          gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts" \
+            -f name=release-candidate-record > matching-records.json
+          test "$(jq -r '.total_count' matching-records.json)" = "1"
+          test "$(jq -r '.artifacts[0].id' matching-records.json)" = "${RECORD_ID}"
+      - name: Download candidate descriptor by artifact ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ github.token }}
+          repository: jiangxt2/ray-clickhouse
+          run-id: ${{ inputs.source_run_id }}
+          artifact-ids: ${{ inputs.candidate_record_artifact_id }}
+          digest-mismatch: error
+          path: validated/candidate-record
+      - name: Resolve candidate descriptor
+        id: record
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          record=validated/candidate-record/release-candidate.json
+          candidate_sha=$(jq -er '.candidate_sha' "${record}")
+          [[ "${candidate_sha}" =~ ^[0-9a-f]{40}$ ]]
+          test "$(jq -r '.repository' "${record}")" = "${GITHUB_REPOSITORY}"
+          test "$(jq -r '.source_run_id' "${record}")" = "${SOURCE_RUN_ID}"
+          test "$(jq -r '.head_sha' source-run.json)" = "${candidate_sha}"
+          test "$(jq -r '.workflow_run.head_sha' record-artifact.json)" = \
+            "${candidate_sha}"
+          {
+            echo "candidate-sha=${candidate_sha}"
+            echo "distribution-id=$(jq -r '.distribution.artifact_id' "${record}")"
+            echo "distribution-digest=$(jq -r '.distribution.artifact_digest' "${record}")"
+            echo "evidence-id=$(jq -r '.clickhouse_evidence.artifact_id' "${record}")"
+            echo "evidence-digest=$(jq -r '.clickhouse_evidence.artifact_digest' "${record}")"
+          } >> "${GITHUB_OUTPUT}"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: candidate-source
+          persist-credentials: false
+          ref: ${{ steps.record.outputs.candidate-sha }}
+      - name: Validate candidate descriptor schema
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          CANDIDATE_SHA: ${{ steps.record.outputs.candidate-sha }}
+        run: >-
+          python3 candidate-source/tools/check_release.py verify-candidate-record
+          --record validated/candidate-record/release-candidate.json
+          --candidate-sha "${CANDIDATE_SHA}"
+          --source-run-id "${SOURCE_RUN_ID}"
+      - name: Verify distribution and evidence artifact API identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          DISTRIBUTION_ID: ${{ steps.record.outputs.distribution-id }}
+          DISTRIBUTION_DIGEST: ${{ steps.record.outputs.distribution-digest }}
+          EVIDENCE_ID: ${{ steps.record.outputs.evidence-id }}
+          EVIDENCE_DIGEST: ${{ steps.record.outputs.evidence-digest }}
+        run: |
+          for kind in distribution evidence; do
+            if [[ "${kind}" == "distribution" ]]; then
+              id=${DISTRIBUTION_ID}
+              digest=${DISTRIBUTION_DIGEST}
+              name=distributions
+            else
+              id=${EVIDENCE_ID}
+              digest=${EVIDENCE_DIGEST}
+              name=clickhouse-26.8-integration
+            fi
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" > "${kind}-artifact.json"
+            test "$(jq -r '.name' "${kind}-artifact.json")" = "${name}"
+            test "$(jq -r '.size_in_bytes > 0' "${kind}-artifact.json")" = "true"
+            test "$(jq -r '.expired' "${kind}-artifact.json")" = "false"
+            test "$(jq -r '.workflow_run.id' "${kind}-artifact.json")" = "${SOURCE_RUN_ID}"
+            test "$(jq -r '.workflow_run.head_sha' "${kind}-artifact.json")" = \
+              "${{ steps.record.outputs.candidate-sha }}"
+            test "$(jq -r '.digest' "${kind}-artifact.json")" = "${digest}"
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts" \
+              -f name="${name}" > "matching-${kind}.json"
+            test "$(jq -r '.total_count' "matching-${kind}.json")" = "1"
+            test "$(jq -r '.artifacts[0].id' "matching-${kind}.json")" = "${id}"
+          done
+      - name: Download candidate distributions by artifact ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ github.token }}
+          repository: jiangxt2/ray-clickhouse
+          run-id: ${{ inputs.source_run_id }}
+          artifact-ids: ${{ steps.record.outputs.distribution-id }}
+          digest-mismatch: error
+          path: validated/candidate-distributions
+      - name: Download ClickHouse evidence by artifact ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ github.token }}
+          repository: jiangxt2/ray-clickhouse
+          run-id: ${{ inputs.source_run_id }}
+          artifact-ids: ${{ steps.record.outputs.evidence-id }}
+          digest-mismatch: error
+          path: validated/clickhouse-evidence
+      - name: Verify distribution files and attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.record.outputs.candidate-sha }}
+        run: |
+          python3 candidate-source/tools/check_release.py verify-files \
+            --directory validated/candidate-distributions \
+            --sha256sums validated/candidate-distributions/SHA256SUMS \
+            --candidate validated/candidate-record/release-candidate.json
+          while read -r digest filename; do
+            test -n "${digest}"
+            filename=${filename#\*}
+            gh attestation verify "validated/candidate-distributions/${filename}" \
+              --repo jiangxt2/ray-clickhouse \
+              --signer-workflow jiangxt2/ray-clickhouse/.github/workflows/ci.yml \
+              --source-digest "${CANDIDATE_SHA}" \
+              --source-ref refs/heads/master \
+              --deny-self-hosted-runners
+          done < validated/candidate-distributions/SHA256SUMS
+          python3 candidate-source/tools/check_release.py verify-clickhouse-evidence \
+            --directory validated/clickhouse-evidence
+      - name: Verify predecessor receipt artifact API identity
+        if: inputs.operation != 'dry-run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREDECESSOR_RUN_ID: ${{ inputs.predecessor_run_id }}
+          PREDECESSOR_ID: ${{ inputs.predecessor_receipt_artifact_id }}
+          PREDECESSOR_DIGEST: ${{ inputs.predecessor_receipt_artifact_digest }}
+        run: |
+          case "${{ inputs.operation }}" in
+            testpypi)
+              expected=dry-run
+              expected_job="Dry-run release validation"
+              ;;
+            release-tag)
+              expected=testpypi
+              expected_job="Publish and smoke TestPyPI"
+              ;;
+            pypi)
+              expected=release-tag
+              expected_job="Create annotated release tag"
+              ;;
+            github-release)
+              expected=pypi
+              expected_job="Publish PyPI"
+              ;;
+            *) exit 1 ;;
+          esac
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREDECESSOR_RUN_ID}" > predecessor-run.json
+          test "$(jq -r '.event' predecessor-run.json)" = "workflow_dispatch"
+          test "$(jq -r '.head_branch' predecessor-run.json)" = "master"
+          test "$(jq -r '.head_repository.full_name' predecessor-run.json)" = \
+            "${GITHUB_REPOSITORY}"
+          test "$(jq -r '.path | split("@")[0]' predecessor-run.json)" = \
+            ".github/workflows/release.yml"
+          test "$(jq -r '.status' predecessor-run.json)" = "completed"
+          test "$(jq -r '.conclusion' predecessor-run.json)" = "success"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${PREDECESSOR_RUN_ID}/jobs?per_page=100" \
+            > predecessor-jobs.json
+          validate_job="Validate immutable candidate and predecessor"
+          for job in "${validate_job}" "${expected_job}"; do
+            jq -e --arg job "${job}" \
+              '[.jobs[] | select(.name == $job and .conclusion == "success")] | length == 1' \
+              predecessor-jobs.json >/dev/null
+          done
+          operation_jobs=(
+            "Dry-run release validation"
+            "Publish and smoke TestPyPI"
+            "Create annotated release tag"
+            "Publish PyPI"
+            "Create GitHub Release"
+          )
+          for job in "${operation_jobs[@]}"; do
+            if [[ "${job}" != "${expected_job}" ]]; then
+              jq -e --arg job "${job}" \
+                '[.jobs[] | select(.name == $job and .conclusion == "success")] | length == 0' \
+                predecessor-jobs.json >/dev/null
+            fi
+          done
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${PREDECESSOR_ID}" > predecessor-artifact.json
+          test "$(jq -r '.name' predecessor-artifact.json)" = \
+            "promotion-receipt-${expected}"
+          test "$(jq -r '.size_in_bytes > 0' predecessor-artifact.json)" = "true"
+          test "$(jq -r '.expired' predecessor-artifact.json)" = "false"
+          test "$(jq -r '.workflow_run.id' predecessor-artifact.json)" = "${PREDECESSOR_RUN_ID}"
+          test "$(jq -r '.workflow_run.head_sha' predecessor-artifact.json)" = \
+            "$(jq -r '.head_sha' predecessor-run.json)"
+          test "$(jq -r '.digest' predecessor-artifact.json)" = "${PREDECESSOR_DIGEST}"
+          gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${PREDECESSOR_RUN_ID}/artifacts" \
+            -f name="promotion-receipt-${expected}" > matching-receipts.json
+          test "$(jq -r '.total_count' matching-receipts.json)" = "1"
+          test "$(jq -r '.artifacts[0].id' matching-receipts.json)" = \
+            "${PREDECESSOR_ID}"
+      - name: Download predecessor receipt by artifact ID
+        if: inputs.operation != 'dry-run'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ github.token }}
+          repository: jiangxt2/ray-clickhouse
+          run-id: ${{ inputs.predecessor_run_id }}
+          artifact-ids: ${{ inputs.predecessor_receipt_artifact_id }}
+          digest-mismatch: error
+          path: validated/predecessor
+      - name: Validate predecessor state transition
+        if: inputs.operation != 'dry-run'
+        env:
+          OPERATION: ${{ inputs.operation }}
+          RECORD_ID: ${{ inputs.candidate_record_artifact_id }}
+          RECORD_DIGEST: ${{ inputs.candidate_record_artifact_digest }}
+        run: |
+          case "${OPERATION}" in
+            testpypi) expected=dry-run ;;
+            release-tag) expected=testpypi ;;
+            pypi) expected=release-tag ;;
+            github-release) expected=pypi ;;
+            *) exit 1 ;;
+          esac
+          receipt=validated/predecessor/promotion-receipt.json
+          python3 candidate-source/tools/check_release.py verify-promotion-receipt \
+            --receipt "${receipt}" \
+            --expected-operation "${expected}" \
+            --candidate validated/candidate-record/release-candidate.json \
+            --candidate-record-id "${RECORD_ID}" \
+            --candidate-record-digest "${RECORD_DIGEST}" \
+            --expected-run-id "${{ inputs.predecessor_run_id }}"
+      - name: Upload validated promotion inputs
+        id: upload-validated
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: validated-promotion-inputs
+          path: validated
+          if-no-files-found: error
+          retention-days: 7
+
+  dry-run:
+    name: Dry-run release validation
+    if: inputs.operation == 'dry-run'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate.outputs.candidate-sha }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.validate.outputs.validated-input-id }}
+          digest-mismatch: error
+          path: validated
+      - name: Verify pre-release external state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v0.1.0" >/dev/null 2>&1; then
+            echo "v0.1.0 already exists" >&2
+            exit 1
+          fi
+          pypi_code=$(curl -sS -o pypi.json -w '%{http_code}' \
+            https://pypi.org/pypi/ray-clickhouse/json)
+          test "${pypi_code}" = "404"
+          testpypi_code=$(curl -sS -o testpypi.json -w '%{http_code}' \
+            https://test.pypi.org/pypi/ray-clickhouse/json)
+          test "${testpypi_code}" = "404"
+          printf '{"operation":"dry-run","pypi":"absent","testpypi":"absent","tag":"absent"}\n' \
+            > external-state.json
+      - name: Create dry-run receipt
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RECORD_ID: ${{ inputs.candidate_record_artifact_id }}
+          RECORD_DIGEST: ${{ inputs.candidate_record_artifact_digest }}
+        run: >-
+          python3 tools/check_release.py create-promotion-receipt
+          --output promotion-receipt.json
+          --operation dry-run
+          --run-id "${RUN_ID}"
+          --candidate validated/candidate-record/release-candidate.json
+          --candidate-record-id "${RECORD_ID}"
+          --candidate-record-digest "${RECORD_DIGEST}"
+          --external-state external-state.json
+          --result success
+      - name: Upload dry-run receipt
+        id: upload-receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: promotion-receipt-dry-run
+          path: promotion-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Record promotion receipt identity
+        env:
+          RECEIPT_ID: ${{ steps.upload-receipt.outputs.artifact-id }}
+          RECEIPT_DIGEST: ${{ steps.upload-receipt.outputs.artifact-digest }}
+          RECEIPT_URL: ${{ steps.upload-receipt.outputs.artifact-url }}
+        run: |
+          {
+            echo "## Promotion receipt: dry-run"
+            echo "- Artifact ID: ${RECEIPT_ID}"
+            echo "- Artifact digest: ${RECEIPT_DIGEST}"
+            echo "- Artifact URL: ${RECEIPT_URL}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  testpypi:
+    name: Publish and smoke TestPyPI
+    if: inputs.operation == 'testpypi'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: testpypi
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate.outputs.candidate-sha }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.validate.outputs.validated-input-id }}
+          digest-mismatch: error
+          path: validated
+      - name: Check TestPyPI state
+        id: state
+        run: |
+          code=$(curl -sS -o testpypi.json -w '%{http_code}' \
+            https://test.pypi.org/pypi/ray-clickhouse/json)
+          if [[ "${code}" == "200" ]]; then
+            python3 tools/check_release.py verify-index \
+              --json-url https://test.pypi.org/pypi/ray-clickhouse/json \
+              --sha256sums validated/candidate-distributions/SHA256SUMS \
+              --output external-state.json
+            echo "publish=false" >> "${GITHUB_OUTPUT}"
+            echo "result=recovered" >> "${GITHUB_OUTPUT}"
+          elif [[ "${code}" == "404" ]]; then
+            mkdir publish-dist
+            cp validated/candidate-distributions/*.whl publish-dist/
+            cp validated/candidate-distributions/*.tar.gz publish-dist/
+            echo "publish=true" >> "${GITHUB_OUTPUT}"
+            echo "result=success" >> "${GITHUB_OUTPUT}"
+          else
+            echo "TestPyPI returned HTTP ${code}" >&2
+            exit 1
+          fi
+      - name: Publish package distributions to TestPyPI
+        if: steps.state.outputs.publish == 'true'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: publish-dist/
+          repository-url: https://test.pypi.org/legacy/
+          attestations: true
+      - name: Verify TestPyPI identity and smoke wheel
+        run: |
+          for attempt in {1..12}; do
+            if python3 tools/check_release.py verify-index \
+              --json-url https://test.pypi.org/pypi/ray-clickhouse/json \
+              --sha256sums validated/candidate-distributions/SHA256SUMS \
+              --output external-state.json; then
+              break
+            fi
+            test "${attempt}" -lt 12
+            sleep 5
+          done
+          mkdir testpypi-download
+          python3 -m pip download --no-deps --only-binary=:all: \
+            --index-url https://test.pypi.org/simple/ \
+            ray-clickhouse==0.1.0 --dest testpypi-download
+          grep '\.whl$' validated/candidate-distributions/SHA256SUMS \
+            > testpypi-wheel.SHA256SUMS
+          (cd testpypi-download && sha256sum --check ../testpypi-wheel.SHA256SUMS)
+          python3 -m venv smoke-venv
+          smoke-venv/bin/python -m pip install --index-url https://pypi.org/simple/ \
+            testpypi-download/*.whl
+          smoke-venv/bin/python - <<'PY'
+          from importlib.metadata import distribution, version
+
+          import ray_clickhouse
+
+          expected = {
+              "AmbiguousTableManagementError",
+              "AmbiguousWriteError",
+              "AuthenticationError",
+              "ConfigurationError",
+              "DiscoveryError",
+              "ObjectNotFoundError",
+              "PermissionError",
+              "RayClickHouseError",
+              "ReadError",
+              "SchemaError",
+              "TransportError",
+              "WriteError",
+              "WriteReceipt",
+              "read_clickhouse",
+              "write_clickhouse",
+          }
+          assert version("ray-clickhouse") == "0.1.0"
+          assert set(ray_clickhouse.__all__) == expected
+          assert distribution("ray-clickhouse").locate_file(
+              "ray_clickhouse/py.typed"
+          ).is_file()
+          PY
+      - name: Create TestPyPI receipt
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RECORD_ID: ${{ inputs.candidate_record_artifact_id }}
+          RECORD_DIGEST: ${{ inputs.candidate_record_artifact_digest }}
+          PREDECESSOR_RUN_ID: ${{ inputs.predecessor_run_id }}
+          PREDECESSOR_ID: ${{ inputs.predecessor_receipt_artifact_id }}
+          PREDECESSOR_DIGEST: ${{ inputs.predecessor_receipt_artifact_digest }}
+          RESULT: ${{ steps.state.outputs.result }}
+        run: >-
+          python3 tools/check_release.py create-promotion-receipt
+          --output promotion-receipt.json
+          --operation testpypi
+          --run-id "${RUN_ID}"
+          --candidate validated/candidate-record/release-candidate.json
+          --candidate-record-id "${RECORD_ID}"
+          --candidate-record-digest "${RECORD_DIGEST}"
+          --predecessor validated/predecessor/promotion-receipt.json
+          --predecessor-run-id "${PREDECESSOR_RUN_ID}"
+          --predecessor-artifact-id "${PREDECESSOR_ID}"
+          --predecessor-artifact-digest "${PREDECESSOR_DIGEST}"
+          --external-state external-state.json
+          --result "${RESULT}"
+      - name: Upload TestPyPI receipt
+        id: upload-receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: promotion-receipt-testpypi
+          path: promotion-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Record promotion receipt identity
+        env:
+          RECEIPT_ID: ${{ steps.upload-receipt.outputs.artifact-id }}
+          RECEIPT_DIGEST: ${{ steps.upload-receipt.outputs.artifact-digest }}
+          RECEIPT_URL: ${{ steps.upload-receipt.outputs.artifact-url }}
+        run: |
+          {
+            echo "## Promotion receipt: testpypi"
+            echo "- Artifact ID: ${RECEIPT_ID}"
+            echo "- Artifact digest: ${RECEIPT_DIGEST}"
+            echo "- Artifact URL: ${RECEIPT_URL}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  release-tag:
+    name: Create annotated release tag
+    if: inputs.operation == 'release-tag'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release-tag
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate.outputs.candidate-sha }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.validate.outputs.validated-input-id }}
+          digest-mismatch: error
+          path: validated
+      - name: Revalidate TestPyPI files
+        run: >-
+          python3 tools/check_release.py verify-index
+          --json-url https://test.pypi.org/pypi/ray-clickhouse/json
+          --sha256sums validated/candidate-distributions/SHA256SUMS
+          --output testpypi-state.json
+      - name: Create or recover annotated tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.validate.outputs.candidate-sha }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v0.1.0" > tag-ref.json 2>/dev/null; then
+            test "$(jq -r '.object.type' tag-ref.json)" = "tag"
+            tag_object=$(jq -r '.object.sha' tag-ref.json)
+            gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" > tag-object.json
+            test "$(jq -r '.object.type' tag-object.json)" = "commit"
+            test "$(jq -r '.object.sha' tag-object.json)" = "${CANDIDATE_SHA}"
+            result=recovered
+          else
+            tag_object=$(gh api --method POST "repos/${GITHUB_REPOSITORY}/git/tags" \
+              -f tag=v0.1.0 \
+              -f message='ray-clickhouse 0.1.0' \
+              -f object="${CANDIDATE_SHA}" \
+              -f type=commit --jq '.sha')
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref=refs/tags/v0.1.0 -f sha="${tag_object}" >/dev/null
+            result=success
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v0.1.0" > tag-ref.json
+          test "$(jq -r '.object.type' tag-ref.json)" = "tag"
+          tag_object=$(jq -r '.object.sha' tag-ref.json)
+          gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" > tag-object.json
+          test "$(jq -r '.tag' tag-object.json)" = "v0.1.0"
+          test "$(jq -r '.object.type' tag-object.json)" = "commit"
+          test "$(jq -r '.object.sha' tag-object.json)" = "${CANDIDATE_SHA}"
+          git fetch --force --no-tags origin \
+            refs/tags/v0.1.0:refs/tags/v0.1.0
+          test "$(git cat-file -t refs/tags/v0.1.0)" = "tag"
+          test "$(git rev-parse 'refs/tags/v0.1.0^{}')" = "${CANDIDATE_SHA}"
+          jq -n --arg operation release-tag --arg result "${result}" \
+            --arg tag v0.1.0 --arg target "${CANDIDATE_SHA}" \
+            '{operation:$operation,result:$result,tag:$tag,tag_type:"annotated",target:$target}' \
+            > external-state.json
+          echo "result=${result}" >> "${GITHUB_OUTPUT}"
+      - name: Create release-tag receipt
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RECORD_ID: ${{ inputs.candidate_record_artifact_id }}
+          RECORD_DIGEST: ${{ inputs.candidate_record_artifact_digest }}
+          PREDECESSOR_RUN_ID: ${{ inputs.predecessor_run_id }}
+          PREDECESSOR_ID: ${{ inputs.predecessor_receipt_artifact_id }}
+          PREDECESSOR_DIGEST: ${{ inputs.predecessor_receipt_artifact_digest }}
+          RESULT: ${{ steps.tag.outputs.result }}
+        run: >-
+          python3 tools/check_release.py create-promotion-receipt
+          --output promotion-receipt.json
+          --operation release-tag
+          --run-id "${RUN_ID}"
+          --candidate validated/candidate-record/release-candidate.json
+          --candidate-record-id "${RECORD_ID}"
+          --candidate-record-digest "${RECORD_DIGEST}"
+          --predecessor validated/predecessor/promotion-receipt.json
+          --predecessor-run-id "${PREDECESSOR_RUN_ID}"
+          --predecessor-artifact-id "${PREDECESSOR_ID}"
+          --predecessor-artifact-digest "${PREDECESSOR_DIGEST}"
+          --external-state external-state.json
+          --result "${RESULT}"
+      - name: Upload release-tag receipt
+        id: upload-receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: promotion-receipt-release-tag
+          path: promotion-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Record promotion receipt identity
+        env:
+          RECEIPT_ID: ${{ steps.upload-receipt.outputs.artifact-id }}
+          RECEIPT_DIGEST: ${{ steps.upload-receipt.outputs.artifact-digest }}
+          RECEIPT_URL: ${{ steps.upload-receipt.outputs.artifact-url }}
+        run: |
+          {
+            echo "## Promotion receipt: release-tag"
+            echo "- Artifact ID: ${RECEIPT_ID}"
+            echo "- Artifact digest: ${RECEIPT_DIGEST}"
+            echo "- Artifact URL: ${RECEIPT_URL}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  pypi:
+    name: Publish PyPI
+    if: inputs.operation == 'pypi'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: pypi
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate.outputs.candidate-sha }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.validate.outputs.validated-input-id }}
+          digest-mismatch: error
+          path: validated
+      - name: Revalidate TestPyPI and annotated tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.validate.outputs.candidate-sha }}
+        run: |
+          python3 tools/check_release.py verify-index \
+            --json-url https://test.pypi.org/pypi/ray-clickhouse/json \
+            --sha256sums validated/candidate-distributions/SHA256SUMS
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v0.1.0" > tag-ref.json
+          test "$(jq -r '.object.type' tag-ref.json)" = "tag"
+          tag_object=$(jq -r '.object.sha' tag-ref.json)
+          gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" > tag-object.json
+          test "$(jq -r '.tag' tag-object.json)" = "v0.1.0"
+          test "$(jq -r '.object.type' tag-object.json)" = "commit"
+          test "$(jq -r '.object.sha' tag-object.json)" = "${CANDIDATE_SHA}"
+          git fetch --force --no-tags origin \
+            refs/tags/v0.1.0:refs/tags/v0.1.0
+          test "$(git cat-file -t refs/tags/v0.1.0)" = "tag"
+          test "$(git rev-parse 'refs/tags/v0.1.0^{}')" = "${CANDIDATE_SHA}"
+      - name: Check PyPI state
+        id: state
+        run: |
+          code=$(curl -sS -o pypi.json -w '%{http_code}' \
+            https://pypi.org/pypi/ray-clickhouse/json)
+          if [[ "${code}" == "200" ]]; then
+            python3 tools/check_release.py verify-index \
+              --json-url https://pypi.org/pypi/ray-clickhouse/json \
+              --sha256sums validated/candidate-distributions/SHA256SUMS \
+              --output external-state.json
+            echo "publish=false" >> "${GITHUB_OUTPUT}"
+            echo "result=recovered" >> "${GITHUB_OUTPUT}"
+          elif [[ "${code}" == "404" ]]; then
+            mkdir publish-dist
+            cp validated/candidate-distributions/*.whl publish-dist/
+            cp validated/candidate-distributions/*.tar.gz publish-dist/
+            echo "publish=true" >> "${GITHUB_OUTPUT}"
+            echo "result=success" >> "${GITHUB_OUTPUT}"
+          else
+            echo "PyPI returned HTTP ${code}" >&2
+            exit 1
+          fi
+      - name: Publish package distributions to PyPI
+        if: steps.state.outputs.publish == 'true'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: publish-dist/
+          attestations: true
+      - name: Verify PyPI identity
+        run: |
+          for attempt in {1..12}; do
+            if python3 tools/check_release.py verify-index \
+              --json-url https://pypi.org/pypi/ray-clickhouse/json \
+              --sha256sums validated/candidate-distributions/SHA256SUMS \
+              --output external-state.json; then
+              break
+            fi
+            test "${attempt}" -lt 12
+            sleep 5
+          done
+      - name: Create PyPI receipt
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RECORD_ID: ${{ inputs.candidate_record_artifact_id }}
+          RECORD_DIGEST: ${{ inputs.candidate_record_artifact_digest }}
+          PREDECESSOR_RUN_ID: ${{ inputs.predecessor_run_id }}
+          PREDECESSOR_ID: ${{ inputs.predecessor_receipt_artifact_id }}
+          PREDECESSOR_DIGEST: ${{ inputs.predecessor_receipt_artifact_digest }}
+          RESULT: ${{ steps.state.outputs.result }}
+        run: >-
+          python3 tools/check_release.py create-promotion-receipt
+          --output promotion-receipt.json
+          --operation pypi
+          --run-id "${RUN_ID}"
+          --candidate validated/candidate-record/release-candidate.json
+          --candidate-record-id "${RECORD_ID}"
+          --candidate-record-digest "${RECORD_DIGEST}"
+          --predecessor validated/predecessor/promotion-receipt.json
+          --predecessor-run-id "${PREDECESSOR_RUN_ID}"
+          --predecessor-artifact-id "${PREDECESSOR_ID}"
+          --predecessor-artifact-digest "${PREDECESSOR_DIGEST}"
+          --external-state external-state.json
+          --result "${RESULT}"
+      - name: Upload PyPI receipt
+        id: upload-receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: promotion-receipt-pypi
+          path: promotion-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Record promotion receipt identity
+        env:
+          RECEIPT_ID: ${{ steps.upload-receipt.outputs.artifact-id }}
+          RECEIPT_DIGEST: ${{ steps.upload-receipt.outputs.artifact-digest }}
+          RECEIPT_URL: ${{ steps.upload-receipt.outputs.artifact-url }}
+        run: |
+          {
+            echo "## Promotion receipt: pypi"
+            echo "- Artifact ID: ${RECEIPT_ID}"
+            echo "- Artifact digest: ${RECEIPT_DIGEST}"
+            echo "- Artifact URL: ${RECEIPT_URL}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  github-release:
+    name: Create GitHub Release
+    if: inputs.operation == 'github-release'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: github-release
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate.outputs.candidate-sha }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.validate.outputs.validated-input-id }}
+          digest-mismatch: error
+          path: validated
+      - name: Revalidate PyPI and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.validate.outputs.candidate-sha }}
+        run: |
+          python3 tools/check_release.py verify-index \
+            --json-url https://pypi.org/pypi/ray-clickhouse/json \
+            --sha256sums validated/candidate-distributions/SHA256SUMS
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v0.1.0" > tag-ref.json
+          test "$(jq -r '.object.type' tag-ref.json)" = "tag"
+          tag_object=$(jq -r '.object.sha' tag-ref.json)
+          gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" > tag-object.json
+          test "$(jq -r '.tag' tag-object.json)" = "v0.1.0"
+          test "$(jq -r '.object.type' tag-object.json)" = "commit"
+          test "$(jq -r '.object.sha' tag-object.json)" = "${CANDIDATE_SHA}"
+          git fetch --force --no-tags origin \
+            refs/tags/v0.1.0:refs/tags/v0.1.0
+          test "$(git cat-file -t refs/tags/v0.1.0)" = "tag"
+          test "$(git rev-parse 'refs/tags/v0.1.0^{}')" = "${CANDIDATE_SHA}"
+      - name: Create or recover GitHub Release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.validate.outputs.candidate-sha }}
+        run: |
+          if gh release view v0.1.0 --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            result=recovered
+          else
+            gh release create v0.1.0 \
+              validated/candidate-distributions/*.whl \
+              validated/candidate-distributions/*.tar.gz \
+              validated/candidate-distributions/SHA256SUMS \
+              --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --title "ray-clickhouse 0.1.0" \
+              --notes-file release-notes/v0.1.0.md
+            result=success
+          fi
+          gh release view v0.1.0 --repo "${GITHUB_REPOSITORY}" \
+            --json id,isDraft,isPrerelease,tagName,url > release-state.json
+          test "$(jq -r '.tagName' release-state.json)" = "v0.1.0"
+          test "$(jq -r '.isDraft' release-state.json)" = "false"
+          test "$(jq -r '.isPrerelease' release-state.json)" = "false"
+          mkdir release-download
+          gh release download v0.1.0 --repo "${GITHUB_REPOSITORY}" \
+            --dir release-download
+          python3 tools/check_release.py record-github-release-state \
+            --directory release-download \
+            --sha256sums validated/candidate-distributions/SHA256SUMS \
+            --candidate-sha "${CANDIDATE_SHA}" \
+            --output external-state.json
+          echo "result=${result}" >> "${GITHUB_OUTPUT}"
+      - name: Create GitHub Release receipt
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RECORD_ID: ${{ inputs.candidate_record_artifact_id }}
+          RECORD_DIGEST: ${{ inputs.candidate_record_artifact_digest }}
+          PREDECESSOR_RUN_ID: ${{ inputs.predecessor_run_id }}
+          PREDECESSOR_ID: ${{ inputs.predecessor_receipt_artifact_id }}
+          PREDECESSOR_DIGEST: ${{ inputs.predecessor_receipt_artifact_digest }}
+          RESULT: ${{ steps.release.outputs.result }}
+        run: >-
+          python3 tools/check_release.py create-promotion-receipt
+          --output promotion-receipt.json
+          --operation github-release
+          --run-id "${RUN_ID}"
+          --candidate validated/candidate-record/release-candidate.json
+          --candidate-record-id "${RECORD_ID}"
+          --candidate-record-digest "${RECORD_DIGEST}"
+          --predecessor validated/predecessor/promotion-receipt.json
+          --predecessor-run-id "${PREDECESSOR_RUN_ID}"
+          --predecessor-artifact-id "${PREDECESSOR_ID}"
+          --predecessor-artifact-digest "${PREDECESSOR_DIGEST}"
+          --external-state external-state.json
+          --result "${RESULT}"
+      - name: Upload GitHub Release receipt
+        id: upload-receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: promotion-receipt-github-release
+          path: promotion-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Record promotion receipt identity
+        env:
+          RECEIPT_ID: ${{ steps.upload-receipt.outputs.artifact-id }}
+          RECEIPT_DIGEST: ${{ steps.upload-receipt.outputs.artifact-digest }}
+          RECEIPT_URL: ${{ steps.upload-receipt.outputs.artifact-url }}
+        run: |
+          {
+            echo "## Promotion receipt: github-release"
+            echo "- Artifact ID: ${RECEIPT_ID}"
+            echo "- Artifact digest: ${RECEIPT_DIGEST}"
+            echo "- Artifact URL: ${RECEIPT_URL}"
+          } >> "${GITHUB_STEP_SUMMARY}"

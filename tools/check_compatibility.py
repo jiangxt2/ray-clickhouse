@@ -178,25 +178,50 @@ def validate_compatibility_texts(
         "quality": (
             "needs: candidate",
             shared_candidate_ref,
-            "uv sync --extra dev --frozen",
+            "uv sync --extra dev --group docs --frozen",
             "uv lock --check",
             ".venv/bin/ruff format --check .",
             ".venv/bin/ruff check .",
             ".venv/bin/mypy",
             ".venv/bin/python tools/check_compatibility.py",
+            ".venv/bin/python tools/check_docs.py",
+            ".venv/bin/python tools/check_release.py check",
+        ),
+        "docs": (
+            "needs: candidate",
+            shared_candidate_ref,
+            "uv sync --extra dev --group docs --frozen",
+            ".venv/bin/python tools/check_docs.py",
+            "make -C doc html",
+            "make -C doc spelling",
+        ),
+        "docs-linkcheck": (
+            "needs: candidate",
+            shared_candidate_ref,
+            "uv sync --extra dev --group docs --frozen",
+            "make -C doc linkcheck",
         ),
         "clickhouse-it": (
             "needs: candidate",
             shared_candidate_ref,
             "uv sync --extra dev --frozen",
+            "outputs:",
+            "artifact-id: ${{ steps.upload-evidence.outputs.artifact-id }}",
+            "artifact-digest: ${{ steps.upload-evidence.outputs.artifact-digest }}",
             "- name: Run ClickHouse integration",
             "- name: Upload ClickHouse integration evidence",
         ),
         "package-build": (
             "needs: candidate",
             shared_candidate_ref,
+            "permissions:",
+            "contents: read",
             ".venv/bin/python -m build",
-            ".venv/bin/twine check dist/*",
+            ".venv/bin/twine check dist/*.whl dist/*.tar.gz",
+            "sha256sum -- *.whl *.tar.gz > SHA256SUMS",
+            "artifact-id: ${{ steps.upload-distributions.outputs.artifact-id }}",
+            "artifact-digest: "
+            "${{ steps.upload-distributions.outputs.artifact-digest }}",
             "actions/upload-artifact@",
         ),
         "package-smoke": (
@@ -207,6 +232,32 @@ def validate_compatibility_texts(
             "uv pip check --python .venv-wheel/bin/python",
             "uv pip check --python .venv-sdist/bin/python",
             "import clickhouse_connect, pyarrow, ray, ray_clickhouse",
+            "d.locate_file('ray_clickhouse/py.typed').is_file()",
+            "d.metadata['License-Expression'] == 'Apache-2.0'",
+            "'Typing :: Typed' in d.metadata.get_all('Classifier')",
+        ),
+        "candidate-record": (
+            "if: >-",
+            "github.event_name == 'push' &&",
+            "github.ref == 'refs/heads/master' &&",
+            "github.workflow_ref ==",
+            "jiangxt2/ray-clickhouse/.github/workflows/ci.yml@refs/heads/master",
+            "needs: [candidate, unit, quality, docs, docs-linkcheck, "
+            "clickhouse-it, package-build, package-smoke]",
+            shared_candidate_ref,
+            "artifact-ids: ${{ needs.package-build.outputs.artifact-id }}",
+            "digest-mismatch: error",
+            "actions: read",
+            "attestations: write",
+            "contents: read",
+            "id-token: write",
+            "- name: Attest distributions",
+            "create-candidate-record",
+            '--source-run-id "${SOURCE_RUN_ID}"',
+            '--distribution-id "${DISTRIBUTION_ID}"',
+            '--evidence-id "${EVIDENCE_ID}"',
+            "name: release-candidate-record",
+            "if-no-files-found: error",
         ),
     }
     for job, fragments in required_job_fragments.items():
@@ -220,6 +271,18 @@ def validate_compatibility_texts(
                     f"CI {job} job is missing required fragment: {fragment!r}"
                 )
 
+    package_smoke = _job_body(workflow, "package-smoke")
+    for fragment in (
+        "d.locate_file('ray_clickhouse/py.typed').is_file()",
+        "d.metadata['License-Expression'] == 'Apache-2.0'",
+        "'Typing :: Typed' in d.metadata.get_all('Classifier')",
+    ):
+        if package_smoke.count(fragment) != 2:
+            errors.append(
+                f"CI package-smoke job must verify wheel and sdist metadata: "
+                f"{fragment!r}"
+            )
+
     required_step_fragments = {
         ("clickhouse-it", "Run ClickHouse integration"): (
             "run: ./scripts/run_clickhouse_it.sh",
@@ -227,10 +290,16 @@ def validate_compatibility_texts(
         ),
         ("clickhouse-it", "Upload ClickHouse integration evidence"): (
             "if: always()",
+            "id: upload-evidence",
             "uses: actions/upload-artifact@",
             "name: clickhouse-26.8-integration",
             "path: artifacts/it",
             "if-no-files-found: error",
+            "retention-days: 90",
+        ),
+        ("candidate-record", "Attest distributions"): (
+            "uses: actions/attest@",
+            "subject-checksums: candidate-distributions/SHA256SUMS",
         ),
     }
     for (job, step), fragments in required_step_fragments.items():
@@ -243,6 +312,14 @@ def validate_compatibility_texts(
                 errors.append(
                     f"CI {job} step {step!r} is missing required fragment: {fragment!r}"
                 )
+
+    package_build = _job_body(workflow, "package-build")
+    for forbidden in ("id-token: write", "attestations: write", "actions/attest@"):
+        if forbidden in package_build:
+            errors.append(
+                "CI package-build job must not receive release privilege: "
+                f"{forbidden!r}"
+            )
 
     if re.search(r"(?m)^\s+paths(?:-ignore)?:", workflow):
         errors.append("CI workflow must not use path filters")

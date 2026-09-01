@@ -2,6 +2,10 @@
 
 Ray Data read and append connector for ClickHouse physical tables.
 
+> [!IMPORTANT]
+> `ray-clickhouse` is community-maintained and is not an official Ray or ClickHouse project.
+> Version `0.1.0` is an Alpha release.
+
 The first release provides:
 
 - structured physical-table reads returning `ray.data.Dataset`;
@@ -21,6 +25,17 @@ The read API follows the Ray Data `Datasource`/`ReadTask` contract. The write AP
 The package-root public API consists of `read_clickhouse()`, `write_clickhouse()`,
 `WriteReceipt`, and the documented error hierarchy. Datasource and Datasink implementation
 classes are internal and are not independent compatibility promises.
+
+## Documentation
+
+- [Documentation index](doc/source/index.md)
+- [Compatibility](doc/source/compatibility.md)
+- [Architecture](doc/source/architecture.md)
+- [Security model](doc/source/security.md)
+- [Troubleshooting](doc/source/troubleshooting.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Release notes](release-notes/v0.1.0.md)
 
 ## Usage
 
@@ -88,13 +103,19 @@ suffixes are allowed. Pandas is resolved through `ray[data]`; it is not an indep
 
 ```bash
 uv sync --extra dev
+uv sync --extra dev --group docs
 uv run ruff format --check .
 uv run ruff check .
 uv run mypy
 uv run python tools/check_compatibility.py
+uv run python tools/check_release.py check
 uv run pytest tests/unit tests/contract
 uv build
-uv run twine check dist/*
+uv run twine check dist/*.whl dist/*.tar.gz
+uv run python tools/check_docs.py
+make -C doc html
+make -C doc spelling
+make -C doc linkcheck
 ./scripts/run_clickhouse_it.sh
 ./scripts/run_ray_cluster_it.sh
 ```

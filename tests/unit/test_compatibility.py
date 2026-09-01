@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,15 @@ def _replace_clickhouse_job_fragment(workflow: str, old: str, new: str) -> str:
     job = workflow[start:end]
     assert old in job
     return workflow[:start] + job.replace(old, new, 1) + workflow[end:]
+
+
+def _replace_job_fragment(workflow: str, job_name: str, old: str, new: str) -> str:
+    start = workflow.index(f"  {job_name}:\n")
+    match = re.search(r"(?m)^  [A-Za-z0-9_-]+:\n", workflow[start + 1 :])
+    end = start + 1 + match.start() if match is not None else len(workflow)
+    body = workflow[start:end]
+    assert old in body
+    return workflow[:start] + body.replace(old, new, 1) + workflow[end:]
 
 
 def test_repository_compatibility_contracts_match() -> None:
@@ -205,6 +215,11 @@ def test_compatibility_checker_requires_clickhouse_integration_job() -> None:
             "Upload ClickHouse integration evidence",
         ),
         (
+            "id: upload-evidence",
+            "id: upload-results",
+            "Upload ClickHouse integration evidence",
+        ),
+        (
             "name: clickhouse-26.8-integration",
             "name: clickhouse-integration",
             "Upload ClickHouse integration evidence",
@@ -217,6 +232,11 @@ def test_compatibility_checker_requires_clickhouse_integration_job() -> None:
         (
             "if-no-files-found: error",
             "if-no-files-found: warn",
+            "Upload ClickHouse integration evidence",
+        ),
+        (
+            "retention-days: 90",
+            "retention-days: 1",
             "Upload ClickHouse integration evidence",
         ),
     ),
@@ -234,6 +254,38 @@ def test_compatibility_checker_rejects_clickhouse_job_drift(
     assert any(expected in error for error in errors)
 
 
+def test_compatibility_checker_rejects_reusable_candidate_attestation() -> None:
+    workflow, readme, pyproject, compatibility_module = _repository_texts()
+    workflow = _replace_job_fragment(
+        workflow,
+        "candidate-record",
+        "jiangxt2/ray-clickhouse/.github/workflows/ci.yml@refs/heads/master",
+        "jiangxt2/ray-clickhouse/.github/workflows/caller.yml@refs/heads/master",
+    )
+
+    errors = validate_compatibility_texts(
+        workflow, readme, pyproject, compatibility_module
+    )
+
+    assert any("candidate-record job" in error for error in errors)
+
+
+def test_compatibility_checker_rejects_package_build_release_privilege() -> None:
+    workflow, readme, pyproject, compatibility_module = _repository_texts()
+    workflow = _replace_job_fragment(
+        workflow,
+        "package-build",
+        "      contents: read\n",
+        "      contents: read\n      id-token: write\n      attestations: write\n",
+    )
+
+    errors = validate_compatibility_texts(
+        workflow, readme, pyproject, compatibility_module
+    )
+
+    assert any("must not receive release privilege" in error for error in errors)
+
+
 def test_compatibility_checker_rejects_path_filters() -> None:
     workflow, readme, pyproject, compatibility_module = _repository_texts()
     workflow = workflow.replace(
@@ -245,3 +297,73 @@ def test_compatibility_checker_rejects_path_filters() -> None:
     )
 
     assert "CI workflow must not use path filters" in errors
+
+
+@pytest.mark.parametrize(
+    ("job", "replacement"),
+    (
+        ("docs", "docs-disabled"),
+        ("docs-linkcheck", "docs-linkcheck-disabled"),
+        ("candidate-record", "candidate-record-disabled"),
+    ),
+)
+def test_compatibility_checker_requires_release_readiness_jobs(
+    job: str, replacement: str
+) -> None:
+    workflow, readme, pyproject, compatibility_module = _repository_texts()
+    workflow = workflow.replace(f"  {job}:\n", f"  {replacement}:\n", 1)
+
+    errors = validate_compatibility_texts(
+        workflow, readme, pyproject, compatibility_module
+    )
+
+    assert f"CI workflow is missing required job: '{job}'" in errors
+
+
+@pytest.mark.parametrize(
+    ("job", "old", "new", "expected"),
+    (
+        (
+            "quality",
+            ".venv/bin/python tools/check_release.py check",
+            "echo release-check-disabled",
+            "quality job",
+        ),
+        (
+            "candidate-record",
+            "artifact-ids: ${{ needs.package-build.outputs.artifact-id }}",
+            "name: distributions",
+            "candidate-record job",
+        ),
+        (
+            "candidate-record",
+            "digest-mismatch: error",
+            "digest-mismatch: warn",
+            "candidate-record job",
+        ),
+        (
+            "candidate-record",
+            "needs: [candidate, unit, quality, docs, docs-linkcheck, "
+            "clickhouse-it, package-build, package-smoke]",
+            "needs: [candidate, unit, quality, package-build, package-smoke]",
+            "candidate-record job",
+        ),
+        (
+            "package-smoke",
+            "d.locate_file('ray_clickhouse/py.typed').is_file()",
+            "True",
+            "package-smoke job",
+        ),
+    ),
+)
+def test_compatibility_checker_rejects_release_candidate_drift(
+    job: str, old: str, new: str, expected: str
+) -> None:
+    workflow, readme, pyproject, compatibility_module = _repository_texts()
+    workflow = _replace_job_fragment(workflow, job, old, new)
+
+    errors = validate_compatibility_texts(
+        workflow, readme, pyproject, compatibility_module
+    )
+
+    assert any(expected in error for error in errors)

@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "Ray Data read and append connector for ClickHouse physical tables"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{name = "jiangxt2"}]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -13,6 +14,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
 ]
 dependencies = [
     "clickhouse-connect[arrow]>=1.5,<1.6",
@@ -20,6 +22,12 @@ dependencies = [
     "ray[data]>=2.55,<2.59",
     "typing-extensions>=4.12,<5",
 ]
+
+[project.urls]
+Homepage = "https://github.com/jiangxt2/ray-clickhouse"
+Source = "https://github.com/jiangxt2/ray-clickhouse"
+Documentation = "https://github.com/jiangxt2/ray-clickhouse/tree/master/doc"
+Changelog = "https://github.com/jiangxt2/ray-clickhouse/tree/master/release-notes"
 
 [project.optional-dependencies]
 dev = [
@@ -31,6 +39,13 @@ dev = [
     "pytest-timeout>=2.3,<3",
     "ruff==0.16.4",
     "twine>=7,<8",
+]
+
+[dependency-groups]
+docs = [
+    "codespell>=2.4,<3",
+    "myst-parser>=4,<5",
+    "sphinx>=7.4,<9",
 ]
 
 [build-system]
@@ -62,4 +77,4 @@ known-first-party = ["ray_clickhouse"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-packages = ["ray_clickhouse"]
+files = ["src/ray_clickhouse", "tools"]
