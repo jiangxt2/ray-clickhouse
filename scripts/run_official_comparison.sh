@@ -120,6 +120,19 @@ compose_cmd() {
         docker compose --project-name "$active_project" --file docker/comparison/compose.yaml "$@"
 }
 
+normalize_case_evidence() {
+    local owner
+    owner="$(id -u):$(id -g)"
+    if [[ ! "$owner" =~ ^[0-9]+:[0-9]+$ ]]; then
+        echo "unable to determine a numeric evidence owner: $owner" >&2
+        return 1
+    fi
+    compose_cmd exec -T ray-head /bin/bash -lc \
+        "find /evidence -xdev -exec chown --no-dereference '$owner' {} + \\
+        && find /evidence -xdev -type d -exec chmod u+rwx {} + \\
+        && find /evidence -xdev -type f -exec chmod u+rw {} +"
+}
+
 record_docker_state() {
     phase=$1
     docker_cmd image ls --filter dangling=true --no-trunc \
@@ -497,6 +510,7 @@ run_case() {
     sampler_status=$?
     set -e
 
+    normalize_case_evidence
     capture_ray_metrics
     if [[ "$job_status" -ne 0 || "$kill_status" -ne 0 || "$sampler_status" -ne 0 ]]; then
         echo "comparison case failed: $safe_case" >&2

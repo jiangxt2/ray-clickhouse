@@ -151,6 +151,8 @@ def test_comparison_image_is_built_once_and_compose_never_builds() -> None:
     assert "RAY_COMPARISON_DRIVER_PID_FILE" in runner
     assert "artifact directory must be absent or empty" in runner
     assert "cleanup_temporary_root" in runner
+    assert "normalize_case_evidence" in runner
+    assert "find /evidence -xdev -exec chown --no-dereference" in runner
     assert "sparse per-service Ray Object Store" in runner
     assert "run_case official read.default.single 0 0 none true false" in runner
     assert "run_case external read.default.single 0 1 none true false" in runner
