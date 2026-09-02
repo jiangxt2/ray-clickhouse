@@ -281,6 +281,8 @@ def summarize_ray_metric_samples(
 ) -> dict[str, float | str]:
     expected_services = {"ray-head", "ray-worker-1", "ray-worker-2"}
     expected_locations = {"MMAP_SHM", "MMAP_DISK", "SPILLED", "WORKER_HEAP"}
+    required_locations = {"MMAP_SHM", "MMAP_DISK", "SPILLED"}
+    dynamic_locations = expected_locations - required_locations
     selected = {"ray_object_store_memory"}
     totals: dict[tuple[int, str], float] = {}
     services_by_sample: dict[int, set[str]] = {}
@@ -324,7 +326,7 @@ def summarize_ray_metric_samples(
         (sample, service, location)
         for sample in measured_samples
         for service in expected_services
-        for location in expected_locations
+        for location in required_locations
         if location not in locations_by_sample_service.get((sample, service), set())
     }
     missing_details = ", ".join(
@@ -339,7 +341,20 @@ def summarize_ray_metric_samples(
     baseline_missing = {
         (service, location)
         for service in expected_services
-        for location in expected_locations
+        for location in required_locations
+        if location not in locations_by_sample_service.get((baseline_sample, service), set())
+    }
+    measured_dynamic_missing = {
+        (sample, service, location)
+        for sample in measured_samples
+        for service in expected_services
+        for location in dynamic_locations
+        if location not in locations_by_sample_service.get((sample, service), set())
+    }
+    baseline_dynamic_missing = {
+        (service, location)
+        for service in expected_services
+        for location in dynamic_locations
         if location not in locations_by_sample_service.get((baseline_sample, service), set())
     }
     result: dict[str, float | str] = {
@@ -347,6 +362,19 @@ def summarize_ray_metric_samples(
         "ray_object_store_baseline_missing_location_count": float(len(baseline_missing)),
         "ray_object_store_baseline_missing_locations": ",".join(
             f"{service}:{location}" for service, location in sorted(baseline_missing)
+        ),
+        "ray_object_store_baseline_missing_dynamic_location_count": float(
+            len(baseline_dynamic_missing)
+        ),
+        "ray_object_store_baseline_missing_dynamic_locations": ",".join(
+            f"{service}:{location}" for service, location in sorted(baseline_dynamic_missing)
+        ),
+        "ray_object_store_measured_missing_dynamic_location_count": float(
+            len(measured_dynamic_missing)
+        ),
+        "ray_object_store_measured_missing_dynamic_locations": ",".join(
+            f"sample={sample} service={service} location={location}"
+            for sample, service, location in sorted(measured_dynamic_missing)
         ),
     }
     if measured_missing:

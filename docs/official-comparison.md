@@ -56,10 +56,13 @@ zero-query-retry policy rather than attempting to override that reserved option.
 Worker memory is reported as process-tree RSS minus shared pages, with the baseline and per-worker
 peaks retained separately. Container memory is a separate observation. Object Store evidence uses
 Ray's documented `ray_object_store_memory` `MMAP_SHM`, `MMAP_DISK`, `SPILLED`, and `WORKER_HEAP`
-locations. Measured samples must contain every declared location for each Ray service; idle-baseline
-omissions are retained per service and make resource telemetry incomplete. Resource-required formal
-runs reject either kind of missing location. The bounded smoke and dry-run profiles record sparse
-exporter series as incomplete diagnostics without publishing resource conclusions.
+locations. The three raylet locations must be present for every Ray service in every measured sample;
+missing data is rejected in resource-required formal runs and is recorded as incomplete in bounded
+profiles. `WORKER_HEAP` is emitted for active core workers and is therefore a dynamic series: an
+absent series is recorded per service and treated as zero for the aggregate, rather than being
+mistaken for a missing raylet exporter. Idle-baseline omissions of the required locations are
+retained per service and make resource telemetry incomplete. The bounded smoke and dry-run profiles
+record sparse exporter series as diagnostics without publishing resource conclusions.
 
 ## Query attribution and faults
 

@@ -201,6 +201,30 @@ def test_ray_metric_summary_rejects_missing_measured_service_location(tmp_path: 
         summarize_ray_metric_samples(metrics)
 
 
+def test_ray_metric_summary_allows_missing_dynamic_worker_heap(tmp_path: Path) -> None:
+    metrics = tmp_path / "ray.prom"
+    services = ("ray-head", "ray-worker-1", "ray-worker-2")
+    required_locations = ("MMAP_SHM", "MMAP_DISK", "SPILLED")
+    lines: list[str] = []
+    for sample in (0, 1):
+        for service in services:
+            lines.append(f"# comparison_sample {sample} service {service}")
+            for location in required_locations:
+                lines.append(f'ray_object_store_memory{{Location="{location}"}} 0')
+            if not (sample == 1 and service == "ray-worker-1"):
+                lines.append('ray_object_store_memory{Location="WORKER_HEAP"} 0')
+    metrics.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    summary = summarize_ray_metric_samples(metrics)
+
+    assert summary["ray_object_store_measured_missing_dynamic_location_count"] == 1.0
+    assert (
+        "sample=1 service=ray-worker-1 location=WORKER_HEAP"
+        in summary["ray_object_store_measured_missing_dynamic_locations"]
+    )
+    assert summary["ray_object_store_memory.WORKER_HEAP_peak_bytes"] == 0.0
+
+
 def test_resource_summary_does_not_accept_sparse_baseline_as_complete(tmp_path: Path) -> None:
     docker_stats = tmp_path / "docker.jsonl"
     rows = {
