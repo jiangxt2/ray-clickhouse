@@ -57,9 +57,9 @@ Worker memory is reported as process-tree RSS minus shared pages, with the basel
 peaks retained separately. Container memory is a separate observation. Object Store evidence uses
 Ray's documented `ray_object_store_memory` `MMAP_SHM`, `MMAP_DISK`, `SPILLED`, and `WORKER_HEAP`
 locations. Measured samples must contain every declared location for each Ray service; idle-baseline
-omissions are retained per service and make resource telemetry incomplete. Resource-required scenarios
-reject either kind of missing location, while the minimal smoke records the omission as a diagnostic
-and makes no resource claim.
+omissions are retained per service and make resource telemetry incomplete. Resource-required formal
+runs reject either kind of missing location. The bounded smoke and dry-run profiles record sparse
+exporter series as incomplete diagnostics without publishing resource conclusions.
 
 ## Query attribution and faults
 

@@ -154,6 +154,8 @@ def test_comparison_image_is_built_once_and_compose_never_builds() -> None:
     assert "sparse per-service Ray Object Store" in runner
     assert "run_case official read.default.single 0 0 none true false" in runner
     assert "run_case external read.default.single 0 1 none true false" in runner
+    assert "run_case official read.controlled.ordered 0 0 none true false" in runner
+    assert "run_case external read.controlled.ordered 0 1 none true false" in runner
     assert 'active_project=""' in runner
     assert "dockerfile-frontend-pull.log" in runner
     assert "docker.m.daocloud.io/docker/dockerfile:1.7@sha256:" in runner

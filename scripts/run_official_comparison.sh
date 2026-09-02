@@ -539,8 +539,10 @@ if [[ "$mode" == "smoke" ]]; then
     run_case external write.transport.post_commit 0 0 drop_response false false
     run_case official write.worker.post_commit 0 0 hold_response false false
 elif [[ "$mode" == "dry-run" ]]; then
-    run_case official read.controlled.ordered 0 0 none true true
-    run_case external read.controlled.ordered 0 1 none true true
+    # Dry-run uses the bounded fixture profile to validate behavior and artifact flow;
+    # formal runs are the only remote profile that makes resource conclusions.
+    run_case official read.controlled.ordered 0 0 none true false
+    run_case external read.controlled.ordered 0 1 none true false
 else
     while IFS=$'\t' read -r scenario fault warmup resource_required repetitions sides; do
         for repetition in $(seq 0 $((repetitions - 1))); do
