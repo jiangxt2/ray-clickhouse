@@ -28,6 +28,7 @@ jobs:
     timeout-minutes: 120
     env:
       RAY_USAGE_STATS_ENABLED: "0"
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - name: Validate immutable candidate
         shell: bash
