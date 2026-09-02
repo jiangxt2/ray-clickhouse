@@ -101,6 +101,18 @@ jobs:
         run: >-
           ./scripts/run_official_comparison.sh "${{ inputs.mode }}"
           >"${RUNNER_TEMP}/ray-clickhouse-comparison-preflight/orchestration.log" 2>&1
+      - name: Normalize raw evidence ownership
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw="${RUNNER_TEMP}/ray-clickhouse-comparison-raw"
+          if [[ -d "${raw}" ]]; then
+            owner="$(id -u):$(id -g)"
+            sudo find "${raw}" -xdev -exec chown --no-dereference "${owner}" {} +
+            sudo find "${raw}" -xdev -type d -exec chmod u+rwx {} +
+            sudo find "${raw}" -xdev -type f -exec chmod u+rw {} +
+          fi
       - name: Stage workflow preflight evidence
         if: always()
         shell: bash

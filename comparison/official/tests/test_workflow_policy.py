@@ -45,6 +45,9 @@ def test_reference_workflow_is_manual_pinned_and_read_only() -> None:
     assert "Upload artifact provenance" in workflow
     assert "ray-clickhouse-comparison-preflight" in workflow
     assert "Stage workflow preflight evidence" in workflow
+    assert "Normalize raw evidence ownership" in workflow
+    assert "chown --no-dereference" in workflow
+    assert 'find "${raw}" -xdev' in workflow
     assert "Sanitize failure diagnostics" in workflow
     assert "Upload failure diagnostics" in workflow
     assert "--require-complete" in workflow
