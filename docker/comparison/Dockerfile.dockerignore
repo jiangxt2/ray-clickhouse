@@ -1,0 +1,14 @@
+**
+!comparison/
+!comparison/official/
+!comparison/official/config/
+!comparison/official/config/**
+!comparison/official/env/
+!comparison/official/env/official-requirements.txt
+!comparison/official/env/external-requirements.txt
+!comparison/official/schema/
+!comparison/official/schema/**
+!docker/
+!docker/comparison/
+!docker/comparison/Dockerfile
+!docker/comparison/Dockerfile.dockerignore

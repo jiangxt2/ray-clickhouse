@@ -1,0 +1,169 @@
+name: ray-clickhouse-comparison
+
+x-runtime: &runtime
+  image: ${RAY_COMPARISON_IMAGE:?RAY_COMPARISON_IMAGE is required}
+  pull_policy: never
+  environment:
+    RAY_USAGE_STATS_ENABLED: "0"
+    RAY_COMPARISON_RUNTIME: ${RAY_COMPARISON_RUNTIME:?RAY_COMPARISON_RUNTIME is required}
+    RAY_COMPARISON_HEAD_OBJECT_STORE_MEMORY_BYTES: ${RAY_COMPARISON_HEAD_OBJECT_STORE_MEMORY_BYTES:?RAY_COMPARISON_HEAD_OBJECT_STORE_MEMORY_BYTES is required}
+    RAY_COMPARISON_WORKER_OBJECT_STORE_MEMORY_BYTES: ${RAY_COMPARISON_WORKER_OBJECT_STORE_MEMORY_BYTES:?RAY_COMPARISON_WORKER_OBJECT_STORE_MEMORY_BYTES is required}
+  networks: [comparison]
+  shm_size: 1gb
+  mem_limit: ${RAY_COMPARISON_WORKER_MEMORY_BYTES:?RAY_COMPARISON_WORKER_MEMORY_BYTES is required}
+  ulimits:
+    nofile:
+      soft: 200000
+      hard: 200000
+
+services:
+  clickhouse:
+    image: ${RAY_COMPARISON_CLICKHOUSE_IMAGE:?RAY_COMPARISON_CLICKHOUSE_IMAGE is required}
+    pull_policy: never
+    environment:
+      CLICKHOUSE_DB: ray_clickhouse_comparison
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    networks:
+      comparison:
+        ipv4_address: 10.251.0.20
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+    restart: "no"
+
+  proxy:
+    <<: *runtime
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks:
+      comparison:
+        ipv4_address: 10.251.0.21
+    volumes:
+      - type: bind
+        source: ${RAY_COMPARISON_ARTIFACT_DIR:?RAY_COMPARISON_ARTIFACT_DIR is required}
+        target: /evidence
+    healthcheck:
+      test:
+        - CMD
+        - /opt/ray-clickhouse/controller/bin/python
+        - -c
+        - "import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:18123/ping', timeout=1).status == 200"
+      interval: 1s
+      timeout: 2s
+      retries: 30
+    command:
+      - /opt/ray-clickhouse/controller/bin/python
+      - -m
+      - ray_clickhouse_comparison.faults
+      - serve
+      - --listen
+      - 0.0.0.0:18123
+      - --target
+      - clickhouse:8123
+      - --control-dir
+      - /evidence/control
+
+  ray-head:
+    <<: *runtime
+    hostname: ray-head
+    mem_limit: ${RAY_COMPARISON_HEAD_MEMORY_BYTES:?RAY_COMPARISON_HEAD_MEMORY_BYTES is required}
+    networks:
+      comparison:
+        ipv4_address: 10.251.0.10
+    environment:
+      RAY_USAGE_STATS_ENABLED: "0"
+      RAY_COMPARISON_RUNTIME: ${RAY_COMPARISON_RUNTIME:?RAY_COMPARISON_RUNTIME is required}
+      RAY_COMPARISON_HEAD_OBJECT_STORE_MEMORY_BYTES: ${RAY_COMPARISON_HEAD_OBJECT_STORE_MEMORY_BYTES:?RAY_COMPARISON_HEAD_OBJECT_STORE_MEMORY_BYTES is required}
+      RAY_COMPARISON_WORKER_OBJECT_STORE_MEMORY_BYTES: ${RAY_COMPARISON_WORKER_OBJECT_STORE_MEMORY_BYTES:?RAY_COMPARISON_WORKER_OBJECT_STORE_MEMORY_BYTES is required}
+      RAY_COMPARISON_RAY_ADDRESS: auto
+      RAY_COMPARISON_CLICKHOUSE_DIRECT_HOST: clickhouse
+      RAY_COMPARISON_CLICKHOUSE_DIRECT_PORT: "8123"
+      RAY_COMPARISON_CLICKHOUSE_PROXY_HOST: proxy
+      RAY_COMPARISON_CLICKHOUSE_PROXY_PORT: "18123"
+    volumes:
+      - type: bind
+        source: ${RAY_COMPARISON_ARTIFACT_DIR:?RAY_COMPARISON_ARTIFACT_DIR is required}
+        target: /evidence
+    command:
+      - /bin/bash
+      - -lc
+      - >-
+        exec /opt/ray-clickhouse/$${RAY_COMPARISON_RUNTIME}/bin/ray start
+        --head --node-ip-address=10.251.0.10 --port=6379
+        --include-dashboard=true --dashboard-host=0.0.0.0 --dashboard-port=8265
+        --metrics-export-port=8080
+        --object-store-memory=$${RAY_COMPARISON_HEAD_OBJECT_STORE_MEMORY_BYTES}
+        --object-spilling-directory=/tmp/ray-spill --num-cpus=0 --block
+
+  ray-worker-1:
+    <<: *runtime
+    hostname: ray-worker-1
+    depends_on: [ray-head]
+    networks:
+      comparison:
+        ipv4_address: 10.251.0.11
+    command:
+      - /bin/bash
+      - -lc
+      - >-
+        exec /opt/ray-clickhouse/$${RAY_COMPARISON_RUNTIME}/bin/ray start
+        --address=ray-head:6379 --node-ip-address=10.251.0.11
+        --metrics-export-port=8080
+        --object-store-memory=$${RAY_COMPARISON_WORKER_OBJECT_STORE_MEMORY_BYTES}
+        --object-spilling-directory=/tmp/ray-spill --num-cpus=1 --block
+
+  ray-worker-2:
+    <<: *runtime
+    hostname: ray-worker-2
+    depends_on: [ray-head]
+    networks:
+      comparison:
+        ipv4_address: 10.251.0.12
+    command:
+      - /bin/bash
+      - -lc
+      - >-
+        exec /opt/ray-clickhouse/$${RAY_COMPARISON_RUNTIME}/bin/ray start
+        --address=ray-head:6379 --node-ip-address=10.251.0.12
+        --metrics-export-port=8080
+        --object-store-memory=$${RAY_COMPARISON_WORKER_OBJECT_STORE_MEMORY_BYTES}
+        --object-spilling-directory=/tmp/ray-spill --num-cpus=1 --block
+
+  runner:
+    <<: *runtime
+    hostname: runner
+    mem_limit: ${RAY_COMPARISON_RUNNER_MEMORY_BYTES:?RAY_COMPARISON_RUNNER_MEMORY_BYTES is required}
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      proxy:
+        condition: service_healthy
+      ray-worker-1:
+        condition: service_started
+      ray-worker-2:
+        condition: service_started
+    networks:
+      comparison:
+        ipv4_address: 10.251.0.30
+    environment:
+      RAY_USAGE_STATS_ENABLED: "0"
+      RAY_COMPARISON_RUNTIME: ${RAY_COMPARISON_RUNTIME:?RAY_COMPARISON_RUNTIME is required}
+      RAY_COMPARISON_RAY_ADDRESS: 10.251.0.10:6379
+      RAY_COMPARISON_CLICKHOUSE_DIRECT_HOST: clickhouse
+      RAY_COMPARISON_CLICKHOUSE_DIRECT_PORT: "8123"
+      RAY_COMPARISON_CLICKHOUSE_PROXY_HOST: proxy
+      RAY_COMPARISON_CLICKHOUSE_PROXY_PORT: "18123"
+    volumes:
+      - type: bind
+        source: ${RAY_COMPARISON_ARTIFACT_DIR:?RAY_COMPARISON_ARTIFACT_DIR is required}
+        target: /evidence
+    command: ["sleep", "infinity"]
+
+networks:
+  comparison:
+    ipam:
+      config:
+        - subnet: 10.251.0.0/24

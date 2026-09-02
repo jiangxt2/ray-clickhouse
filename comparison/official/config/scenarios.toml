@@ -1,0 +1,277 @@
+schema_version = 1
+
+[[scenario]]
+id = "read.default.single"
+group = "default_read_planning"
+sides = ["official", "external"]
+profile = "default"
+terminal_action = "stream"
+fault = "none"
+split = "single"
+write_retry = "default"
+correctness_gate = "fixture_identity"
+query_roles = ["planning", "estimate", "sample", "data"]
+invalid_if = ["fixture_mismatch", "missing_query_attribution", "incomplete_telemetry"]
+fixture_rows = 131072
+fixture_payload_bytes = 1024
+repetitions = 3
+warmup = true
+resource_metrics_required = true
+
+[[scenario]]
+id = "read.controlled.partition"
+group = "controlled_partition_planning"
+sides = ["official", "external"]
+profile = "controlled"
+terminal_action = "stream"
+fault = "none"
+split = "partition"
+write_retry = "default"
+correctness_gate = "fixture_identity"
+query_roles = ["planning", "estimate", "sample", "data"]
+invalid_if = ["fixture_mismatch", "missing_query_attribution", "incomplete_telemetry"]
+fixture_rows = 131072
+fixture_payload_bytes = 1024
+repetitions = 3
+warmup = true
+resource_metrics_required = true
+unique_order_key = "id"
+
+[[scenario]]
+id = "read.controlled.ordered"
+group = "controlled_range_streaming"
+sides = ["official", "external"]
+profile = "controlled"
+terminal_action = "stream"
+fault = "none"
+split = "range"
+write_retry = "default"
+correctness_gate = "fixture_identity"
+query_roles = ["planning", "estimate", "sample", "data"]
+invalid_if = ["fixture_mismatch", "missing_query_attribution", "incomplete_telemetry"]
+fixture_rows = 131072
+fixture_payload_bytes = 1024
+repetitions = 3
+warmup = true
+resource_metrics_required = true
+unique_order_key = "id"
+
+[[scenario]]
+id = "read.controlled.materialize"
+group = "full_materialization"
+sides = ["official", "external"]
+profile = "controlled"
+terminal_action = "materialize"
+fault = "none"
+split = "range"
+write_retry = "default"
+correctness_gate = "fixture_identity"
+query_roles = ["planning", "estimate", "sample", "data"]
+invalid_if = ["fixture_mismatch", "missing_query_attribution", "incomplete_telemetry"]
+fixture_rows = 262144
+fixture_payload_bytes = 1024
+repetitions = 3
+warmup = true
+resource_metrics_required = true
+unique_order_key = "id"
+
+[[scenario]]
+id = "write.transport.post_commit"
+group = "post_commit_pre_ack"
+sides = ["official", "external"]
+profile = "default"
+terminal_action = "write"
+fault = "drop_response"
+split = "single"
+write_retry = "default"
+correctness_gate = "post_commit_reconciliation"
+query_roles = ["planning", "data"]
+invalid_if = ["fault_count_not_one", "missing_insert_finish", "reconciliation_failure"]
+fixture_rows = 2
+fixture_payload_bytes = 32
+repetitions = 1
+warmup = false
+resource_metrics_required = false
+
+[[scenario]]
+id = "write.worker.post_commit"
+group = "post_commit_worker_loss"
+sides = ["official", "external"]
+profile = "default"
+terminal_action = "write"
+fault = "hold_response"
+split = "single"
+write_retry = "default"
+correctness_gate = "worker_loss_reconciliation"
+query_roles = ["planning", "data"]
+invalid_if = ["fault_count_not_one", "wrong_worker_killed", "missing_task_attempts", "reconciliation_failure"]
+fixture_rows = 2
+fixture_payload_bytes = 32
+repetitions = 1
+warmup = false
+resource_metrics_required = false
+
+[[scenario]]
+id = "write.worker.controlled_zero_retry"
+group = "post_commit_worker_loss"
+sides = ["official", "external"]
+profile = "controlled"
+terminal_action = "write"
+fault = "hold_response"
+split = "single"
+write_retry = "zero"
+correctness_gate = "worker_loss_reconciliation"
+query_roles = ["planning", "data"]
+invalid_if = ["fault_count_not_one", "wrong_worker_killed", "missing_task_attempts", "reconciliation_failure"]
+fixture_rows = 2
+fixture_payload_bytes = 32
+repetitions = 1
+warmup = false
+resource_metrics_required = false
+
+[[scenario]]
+id = "contract.types"
+group = "type_and_column_contract"
+sides = ["official", "external"]
+profile = "controlled"
+terminal_action = "stream"
+fault = "none"
+split = "single"
+write_retry = "default"
+correctness_gate = "fixture_identity"
+query_roles = ["planning", "estimate", "sample", "data"]
+invalid_if = ["fixture_mismatch", "column_order_mismatch", "missing_query_attribution"]
+fixture_rows = 4096
+fixture_payload_bytes = 128
+repetitions = 1
+warmup = true
+resource_metrics_required = false
+unique_order_key = "id"
+
+[[scenario]]
+id = "contract.unknown_type"
+group = "type_and_column_contract"
+sides = ["official", "external"]
+profile = "controlled"
+terminal_action = "stream"
+fault = "none"
+split = "single"
+write_retry = "default"
+correctness_gate = "public_error_observation"
+query_roles = ["planning", "estimate", "sample", "data"]
+invalid_if = ["harness_setup_failure", "unexpected_data", "classification_mismatch"]
+fixture_rows = 1
+fixture_payload_bytes = 32
+repetitions = 1
+warmup = false
+resource_metrics_required = false
+
+[[scenario]]
+id = "contract.column_order"
+group = "type_and_column_contract"
+sides = ["official", "external"]
+profile = "controlled"
+terminal_action = "stream"
+fault = "none"
+split = "single"
+write_retry = "default"
+correctness_gate = "projected_schema_and_fixture_identity"
+query_roles = ["planning", "estimate", "sample", "data"]
+invalid_if = ["fixture_mismatch", "column_order_mismatch", "missing_query_attribution"]
+fixture_rows = 4096
+fixture_payload_bytes = 128
+repetitions = 1
+warmup = true
+resource_metrics_required = false
+unique_order_key = "id"
+columns = ["payload", "id"]
+
+[[scenario]]
+id = "read.error.authentication"
+group = "discovery_and_read_failures"
+sides = ["official", "external"]
+profile = "controlled"
+terminal_action = "stream"
+fault = "none"
+split = "single"
+write_retry = "default"
+correctness_gate = "public_error_observation"
+query_roles = ["planning", "estimate", "sample", "data"]
+invalid_if = ["harness_setup_failure", "unexpected_data", "classification_mismatch"]
+fixture_rows = 256
+fixture_payload_bytes = 64
+repetitions = 1
+warmup = false
+resource_metrics_required = false
+
+[[scenario]]
+id = "read.error.permission"
+group = "discovery_and_read_failures"
+sides = ["official", "external"]
+profile = "controlled"
+terminal_action = "stream"
+fault = "none"
+split = "single"
+write_retry = "default"
+correctness_gate = "public_error_observation"
+query_roles = ["planning", "estimate", "sample", "data"]
+invalid_if = ["missing_permission_fixture", "unexpected_data", "classification_mismatch"]
+fixture_rows = 256
+fixture_payload_bytes = 64
+repetitions = 1
+warmup = false
+resource_metrics_required = false
+
+[[scenario]]
+id = "read.error.timeout"
+group = "discovery_and_read_failures"
+sides = ["official", "external"]
+profile = "controlled"
+terminal_action = "stream"
+fault = "none"
+split = "single"
+write_retry = "default"
+correctness_gate = "public_error_observation"
+query_roles = ["planning", "estimate", "sample", "data"]
+invalid_if = ["harness_setup_failure", "unexpected_data", "classification_mismatch"]
+fixture_rows = 256
+fixture_payload_bytes = 64
+repetitions = 1
+warmup = false
+resource_metrics_required = false
+
+[[scenario]]
+id = "read.error.object_not_found"
+group = "discovery_and_read_failures"
+sides = ["official", "external"]
+profile = "controlled"
+terminal_action = "stream"
+fault = "none"
+split = "single"
+write_retry = "default"
+correctness_gate = "public_error_observation"
+query_roles = ["planning", "estimate", "sample", "data"]
+invalid_if = ["harness_setup_failure", "unexpected_data", "classification_mismatch"]
+fixture_rows = 1
+fixture_payload_bytes = 32
+repetitions = 1
+warmup = false
+resource_metrics_required = false
+
+[[scenario]]
+id = "read.error.transport"
+group = "discovery_and_read_failures"
+sides = ["official", "external"]
+profile = "controlled"
+terminal_action = "stream"
+fault = "none"
+split = "single"
+write_retry = "default"
+correctness_gate = "public_error_observation"
+query_roles = ["planning", "estimate", "sample", "data"]
+invalid_if = ["harness_setup_failure", "unexpected_data", "classification_mismatch"]
+fixture_rows = 1
+fixture_payload_bytes = 32
+repetitions = 1
+warmup = false
+resource_metrics_required = false

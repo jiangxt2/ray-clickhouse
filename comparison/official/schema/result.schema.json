@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jiangxt2/ray-clickhouse/comparison/result.schema.json",
+  "title": "Ray ClickHouse comparison result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "scenario_id", "side", "repetition", "status", "correctness", "metrics"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string"},
+    "scenario_id": {"type": "string"},
+    "side": {"enum": ["official", "external"]},
+    "repetition": {"type": "integer", "minimum": 0},
+    "status": {"enum": ["valid", "invalid", "failed"]},
+    "reason": {"type": ["string", "null"]},
+    "correctness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["row_count", "schema_sha256", "multiset_sha256"],
+      "properties": {
+        "row_count": {"type": "integer", "minimum": 0},
+        "schema_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "multiset_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "metrics": {"type": "object", "additionalProperties": {"type": ["integer", "number", "string", "boolean", "null"]}},
+    "exception": {"type": ["object", "null"], "additionalProperties": {"type": ["string", "null"]}}
+  }
+}

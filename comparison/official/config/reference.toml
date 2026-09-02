@@ -1,0 +1,37 @@
+schema_version = 1
+runtime_base_commit = "1b1995155dd8bd68c6e537daa8b9348f80ce7c83"
+python_version = "3.12"
+ray_version = "2.58.0"
+clickhouse_version = "26.8.1.2041"
+clickhouse_image = "docker.m.daocloud.io/clickhouse/clickhouse-server@sha256:9f8fa0d51f86611fda226c4085cdafdddce35312a60c934de2e4450d61fcb99a"
+ray_base_image = "docker.m.daocloud.io/rayproject/ray@sha256:c3c9573c5c6bfe4127885f79622d6a32064d34cafc7d156ec728aab8657be250"
+reference_runner = "ubuntu-24.04-x64"
+warmup_repetitions = 1
+measured_repetitions = 3
+sampling_interval_seconds = 0.25
+scenario_timeout_seconds = 300
+
+[resources]
+ray_workers = 2
+cpus_per_worker = 1
+worker_memory_bytes = 2147483648
+task_memory_bytes = 536870912
+head_memory_bytes = 4294967296
+runner_memory_bytes = 2147483648
+head_object_store_memory_bytes = 536870912
+worker_object_store_memory_bytes = 268435456
+clickhouse_max_threads = 2
+external_batch_rows = 65536
+external_batch_bytes = 67108864
+
+[evidence]
+schema_version = 1
+complete_log_retention_days = 30
+result_retention_days = 90
+require_sanitization = true
+
+[docker]
+context = "."
+dockerfile = "docker/comparison/Dockerfile"
+dockerignore = "docker/comparison/Dockerfile.dockerignore"
+compose_file = "docker/comparison/compose.yaml"
