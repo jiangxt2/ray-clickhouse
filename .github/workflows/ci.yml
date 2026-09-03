@@ -25,9 +25,6 @@ jobs:
     timeout-minutes: 5
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
-      runtime_relevant: ${{ steps.classify.outputs.runtime_relevant }}
-      changed_paths: ${{ steps.classify.outputs.changed_paths }}
-      classification_reason: ${{ steps.classify.outputs.reason }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,23 +51,6 @@ jobs:
           set -euo pipefail
           git checkout --detach "${CANDIDATE_SHA}"
           test "$(git rev-parse HEAD)" = "${CANDIDATE_SHA}"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          python-version: "3.12"
-      - id: classify
-        name: Classify runtime relevance
-        env:
-          CANDIDATE_SHA: ${{ steps.resolve.outputs.sha }}
-          EVENT_NAME: ${{ github.event_name }}
-          BEFORE_SHA: ${{ github.event.before }}
-        run: >-
-          uv run --project comparison/official python
-          comparison/official/src/ray_clickhouse_comparison/config.py
-          --event "${EVENT_NAME}"
-          --base "${BEFORE_SHA}"
-          --head "${CANDIDATE_SHA}"
-          --repo .
-          --github-output "${GITHUB_OUTPUT}"
 
   unit:
     name: Python ${{ matrix.python }} / Ray ${{ matrix.ray }}
@@ -141,8 +121,6 @@ jobs:
       - run: .venv/bin/python tools/check_compatibility.py
       - run: .venv/bin/python tools/check_docs.py
       - run: .venv/bin/python tools/check_release.py check
-      - name: Check official comparison harness
-        run: ./scripts/check_official_comparison.sh
 
   docs:
     name: Documentation
@@ -188,33 +166,21 @@ jobs:
       artifact-digest: sha256:${{ steps.upload-evidence.outputs.artifact-digest }}
       artifact-url: ${{ steps.upload-evidence.outputs.artifact-url }}
     steps:
-      - name: Record evidence-only no-op
-        if: needs.candidate.outputs.runtime_relevant == 'false'
-        env:
-          CLASSIFICATION_REASON: ${{ needs.candidate.outputs.classification_reason }}
-          CHANGED_PATHS: ${{ needs.candidate.outputs.changed_paths }}
-        run: |
-          echo "ClickHouse IT is not required: ${CLASSIFICATION_REASON}"
-          echo "Changed paths (JSON): ${CHANGED_PATHS}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.candidate.outputs.runtime_relevant == 'true'
         with:
           persist-credentials: false
           ref: ${{ needs.candidate.outputs.sha }}
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        if: needs.candidate.outputs.runtime_relevant == 'true'
         with:
           python-version: "3.12"
       - run: uv sync --extra dev --frozen
-        if: needs.candidate.outputs.runtime_relevant == 'true'
       - name: Run ClickHouse integration
-        if: needs.candidate.outputs.runtime_relevant == 'true'
         run: ./scripts/run_clickhouse_it.sh
         env:
           RAY_CLICKHOUSE_IT_ARTIFACT_DIR: artifacts/it
       - name: Upload ClickHouse integration evidence
         id: upload-evidence
-        if: always() && needs.candidate.outputs.runtime_relevant == 'true'
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: clickhouse-26.8-integration
@@ -314,8 +280,7 @@ jobs:
       github.event_name == 'push' &&
       github.ref == 'refs/heads/master' &&
       github.workflow_ref ==
-      'jiangxt2/ray-clickhouse/.github/workflows/ci.yml@refs/heads/master' &&
-      needs.candidate.outputs.runtime_relevant == 'true'
+      'jiangxt2/ray-clickhouse/.github/workflows/ci.yml@refs/heads/master'
     needs: [candidate, unit, quality, docs, docs-linkcheck, clickhouse-it, package-build, package-smoke]
     runs-on: ubuntu-24.04
     timeout-minutes: 10

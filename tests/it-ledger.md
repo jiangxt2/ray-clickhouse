@@ -1,5 +1,11 @@
 # Integration test ledger
 
+> The comparison harness and its associated dry-run/formal suites were retired
+> after review. Rows beginning with `Official comparison` are historical
+> diagnostics only and are not release or contribution gates. Current validation
+> follows the repository's normal unit, contract, integration, and Ray-cluster
+> suites.
+
 | Suite | Scope | Code/config state | Reason | Result |
 | --- | --- | --- | --- | --- |
 | `tests/integration` with ClickHouse Docker | Real ClickHouse 24.8, Ray Data local runtime, filtered single read, logical Date/Decimal/DateTime values, empty table, View/aggregate View, Distributed policy, partition/range split, sync/async append, create/overwrite, schema rejection, permission failure | Enhanced implementation after DDL preflight, explicit nullability, precision-preserving type mapping, ambiguous table-management errors, and metadata tracing | Final compatibility regression after review fixes | Passed: 11 tests, 1 expected multi-node skip, 2026-08-22 |

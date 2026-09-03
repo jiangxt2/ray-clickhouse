@@ -55,16 +55,6 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/ray_clickhouse"]
 
-[tool.hatch.build.targets.sdist]
-exclude = [
-    "/comparison",
-    "/docker/comparison",
-    "/scripts/check_official_comparison.sh",
-    "/scripts/run_official_comparison.sh",
-    "/.github/workflows/official-comparison.yml",
-    "/docs/official-comparison.md",
-]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
