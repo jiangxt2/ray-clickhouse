@@ -464,6 +464,12 @@ def test_clickhouse_evidence_requires_passing_junit_and_logs(tmp_path: Path) -> 
         ),
         (
             1,
+            "artifacts?name=promotion-receipt-${expected}",
+            "artifacts?name=promotion-receipt-${other}",
+            "missing required fragment",
+        ),
+        (
+            1,
             'validate_job="Validate immutable candidate and predecessor"',
             'validate_job="Unverified validation"',
             "Validate immutable candidate",

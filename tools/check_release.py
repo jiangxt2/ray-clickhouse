@@ -589,7 +589,9 @@ def validate_release_texts(
         'expected_job="Publish PyPI"',
         "operation_jobs=(",
         '.conclusion == "success")] | length == 0',
-        'name="promotion-receipt-${expected}"',
+        "artifacts?name=release-candidate-record",
+        "artifacts?name=${name}",
+        "artifacts?name=promotion-receipt-${expected}",
     )
     for fragment in release_fragments:
         if fragment not in release_workflow:

@@ -140,9 +140,9 @@ jobs:
           test "$(jq -r '.expired' record-artifact.json)" = "false"
           test "$(jq -r '.workflow_run.id' record-artifact.json)" = "${SOURCE_RUN_ID}"
           test "$(jq -r '.digest' record-artifact.json)" = "${RECORD_DIGEST}"
-          gh api --method GET \
-            "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts" \
-            -f name=release-candidate-record > matching-records.json
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts?name=release-candidate-record" \
+            > matching-records.json
           test "$(jq -r '.total_count' matching-records.json)" = "1"
           test "$(jq -r '.artifacts[0].id' matching-records.json)" = "${RECORD_ID}"
       - name: Download candidate descriptor by artifact ID
@@ -215,9 +215,9 @@ jobs:
             test "$(jq -r '.workflow_run.head_sha' "${kind}-artifact.json")" = \
               "${{ steps.record.outputs.candidate-sha }}"
             test "$(jq -r '.digest' "${kind}-artifact.json")" = "${digest}"
-            gh api --method GET \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts" \
-              -f name="${name}" > "matching-${kind}.json"
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts?name=${name}" \
+              > "matching-${kind}.json"
             test "$(jq -r '.total_count' "matching-${kind}.json")" = "1"
             test "$(jq -r '.artifacts[0].id' "matching-${kind}.json")" = "${id}"
           done
@@ -328,9 +328,9 @@ jobs:
           test "$(jq -r '.workflow_run.head_sha' predecessor-artifact.json)" = \
             "$(jq -r '.head_sha' predecessor-run.json)"
           test "$(jq -r '.digest' predecessor-artifact.json)" = "${PREDECESSOR_DIGEST}"
-          gh api --method GET \
-            "repos/${GITHUB_REPOSITORY}/actions/runs/${PREDECESSOR_RUN_ID}/artifacts" \
-            -f name="promotion-receipt-${expected}" > matching-receipts.json
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${PREDECESSOR_RUN_ID}/artifacts?name=promotion-receipt-${expected}" \
+            > matching-receipts.json
           test "$(jq -r '.total_count' matching-receipts.json)" = "1"
           test "$(jq -r '.artifacts[0].id' matching-receipts.json)" = \
             "${PREDECESSOR_ID}"
