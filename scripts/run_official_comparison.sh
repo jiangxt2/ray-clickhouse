@@ -558,7 +558,10 @@ elif [[ "$mode" == "dry-run" ]]; then
     run_case official read.controlled.ordered 0 0 none true false
     run_case external read.controlled.ordered 0 1 none true false
 else
-    while IFS=$'\t' read -r scenario fault warmup resource_required repetitions sides; do
+    # Keep the scenario stream on a dedicated descriptor. Commands in run_case
+    # may inherit stdin (for example docker compose exec), and must not consume
+    # the remaining scenario definitions.
+    while IFS=$'\t' read -r scenario fault warmup resource_required repetitions sides <&3; do
         for repetition in $(seq 0 $((repetitions - 1))); do
             IFS=',' read -r first_side second_side <<<"$sides"
             if (( repetition % 2 == 1 )); then
@@ -571,7 +574,7 @@ else
             run_case "$second_side" "$scenario" "$repetition" 1 "$fault" \
                 "$warmup" "$resource_required"
         done
-    done < <(uv run --project comparison/official python -c \
+    done 3< <(uv run --project comparison/official python -c \
         "from pathlib import Path; from ray_clickhouse_comparison.config import load_scenarios; [print(s.id, s.fault, str(s.warmup).lower(), str(s.resource_metrics_required).lower(), s.repetitions, ','.join(s.sides), sep='\\t') for s in load_scenarios(Path('comparison/official/config/scenarios.toml'))]")
 fi
 
