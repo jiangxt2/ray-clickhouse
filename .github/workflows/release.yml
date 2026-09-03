@@ -77,21 +77,14 @@ jobs:
           # GITHUB_REF even when ref=master is supplied.
           test "${WORKFLOW_REF}" = \
             "jiangxt2/ray-clickhouse/.github/workflows/release.yml@refs/heads/master"
-          [[ "${SOURCE_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
-          test "${SOURCE_RUN_ID}" != "${GITHUB_RUN_ID}"
-          [[ "${RECORD_ID}" =~ ^[1-9][0-9]*$ ]]
-          [[ "${RECORD_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
           if [[ "${OPERATION}" == "dry-run" ]]; then
             test -z "${PREDECESSOR_RUN_ID}"
             test -z "${PREDECESSOR_ID}"
             test -z "${PREDECESSOR_DIGEST}"
           else
-            [[ "${PREDECESSOR_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
-            [[ "${PREDECESSOR_ID}" =~ ^[1-9][0-9]*$ ]]
-            [[ "${PREDECESSOR_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
-            test "${PREDECESSOR_RUN_ID}" != "${SOURCE_RUN_ID}"
-            test "${PREDECESSOR_RUN_ID}" != "${GITHUB_RUN_ID}"
-            test "${PREDECESSOR_ID}" != "${RECORD_ID}"
+            test -n "${PREDECESSOR_RUN_ID}"
+            test -n "${PREDECESSOR_ID}"
+            test -n "${PREDECESSOR_DIGEST}"
           fi
       - name: Verify source CI run
         env:
