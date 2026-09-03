@@ -16,6 +16,7 @@ from ray_clickhouse_comparison.runner import (
     _official_read,
     _setup_permission_fixture,
     _task_metrics,
+    _worker_kill_marker,
     _write_dataset,
     classify_query_role,
     validate_smoke_result,
@@ -256,6 +257,20 @@ def test_worker_loss_contract_distinguishes_public_retry_policies() -> None:
     assert _expected_worker_loss("official", zero) == (1, 1, 0, "FAILED", 2, 2)
     assert _expected_worker_loss("external", default) == (1, 1, 0, "FAILED", 1, 2)
     assert _expected_worker_loss("external", zero) == (1, 1, 0, "FAILED", 1, 2)
+
+
+def test_worker_loss_uses_explicit_case_marker(monkeypatch, tmp_path: Path) -> None:
+    control_dir = tmp_path / "control"
+    configured = tmp_path / "case" / "killed-worker.txt"
+    monkeypatch.setenv("RAY_COMPARISON_WORKER_KILL_MARKER", str(configured))
+
+    assert _worker_kill_marker(control_dir) == configured
+
+
+def test_worker_loss_marker_defaults_next_to_control_dir(tmp_path: Path) -> None:
+    control_dir = tmp_path / "case" / "control"
+
+    assert _worker_kill_marker(control_dir) == tmp_path / "case" / "killed-worker.txt"
 
 
 def test_task_metrics_scopes_write_evidence_to_write_tasks(monkeypatch) -> None:

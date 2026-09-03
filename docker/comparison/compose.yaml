@@ -45,6 +45,9 @@ services:
       - type: bind
         source: ${RAY_COMPARISON_ARTIFACT_DIR:?RAY_COMPARISON_ARTIFACT_DIR is required}
         target: /evidence
+      - type: bind
+        source: ${RAY_COMPARISON_CONTROL_DIR:?RAY_COMPARISON_CONTROL_DIR is required}
+        target: /control
     healthcheck:
       test:
         - CMD
@@ -64,7 +67,7 @@ services:
       - --target
       - clickhouse:8123
       - --control-dir
-      - /evidence/control
+      - /control
 
   ray-head:
     <<: *runtime
@@ -87,6 +90,9 @@ services:
       - type: bind
         source: ${RAY_COMPARISON_ARTIFACT_DIR:?RAY_COMPARISON_ARTIFACT_DIR is required}
         target: /evidence
+      - type: bind
+        source: ${RAY_COMPARISON_CONTROL_DIR:?RAY_COMPARISON_CONTROL_DIR is required}
+        target: /control
     command:
       - /bin/bash
       - -lc
@@ -160,6 +166,9 @@ services:
       - type: bind
         source: ${RAY_COMPARISON_ARTIFACT_DIR:?RAY_COMPARISON_ARTIFACT_DIR is required}
         target: /evidence
+      - type: bind
+        source: ${RAY_COMPARISON_CONTROL_DIR:?RAY_COMPARISON_CONTROL_DIR is required}
+        target: /control
     command: ["sleep", "infinity"]
 
 networks:

@@ -620,6 +620,11 @@ def _pair_position() -> int:
     return position
 
 
+def _worker_kill_marker(control_dir: Path) -> Path:
+    configured = os.environ.get("RAY_COMPARISON_WORKER_KILL_MARKER")
+    return Path(configured) if configured else control_dir.parent / "killed-worker.txt"
+
+
 def _exception_type_names(exc: BaseException) -> tuple[str, ...]:
     names: list[str] = []
     seen: set[int] = set()
@@ -942,7 +947,7 @@ def _write_result(
     query_metrics = _query_metrics(log_comment, scenario)
     chain = _exception_type_names(caught) if caught is not None else ()
     worker_kill_observed = (
-        scenario.fault != "hold_response" or (control_dir.parent / "killed-worker.txt").is_file()
+        scenario.fault != "hold_response" or _worker_kill_marker(control_dir).is_file()
     )
     metrics: dict[str, int | float | str | bool | None] = {
         **query_metrics,

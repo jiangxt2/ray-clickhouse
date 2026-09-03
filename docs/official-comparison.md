@@ -28,11 +28,18 @@ second time.
 
 Fixture creation and write-table DDL run in an explicit preparation phase. Successful read scenarios
 then run the configured public-API warmup outside the measurement window, release that driver, and
-capture a fresh baseline before the measured driver starts. Each side and repetition receives a new
-comparison-owned Ray cluster, Object Store, spill directory, ClickHouse container, and result tree.
+capture a fresh baseline before the measured driver starts. The runtime image is built once per
+invocation. Behavior, contract, error, and transport-fault cases reuse one comparison-owned
+Compose/Ray cluster per runtime side and isolated case evidence directories; each side's cluster is
+torn down once at suite end. Resource scenarios use one clean cluster per side and repetition, so
+the paired observations remain in one job while their baseline, Object Store, and spill observations
+remain isolated. Worker-loss cases use separate clusters per side because the injected worker
+termination is terminal and Ray workers are bound to one runtime environment.
 The driver and readiness probe execute inside `ray-head`, where `ray.init(address="auto")` can use
 the local Ray node discovery path; this follows the ray-doris cluster test layout. Driver RSS is
 sampled from the measured driver process itself, not from the idle runner peer.
+Formal contract, error, and transport-fault cases retain their query/task/result evidence without
+starting the resource sampler; resource evidence files are required only for resource scenarios.
 
 ## Controls and interpretation
 

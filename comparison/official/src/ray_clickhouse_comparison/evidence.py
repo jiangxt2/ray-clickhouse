@@ -99,8 +99,40 @@ _COMMON_ROOT_FILES = _ALLOWED_ROOT_FILES - _REMOTE_ROOT_FILES
 _COMMON_CASE_FILES = _ALLOWED_CASE_FILES - {
     "killed-worker.txt",
     "permission-cleanup.log",
+    "docker-stats.jsonl",
+    "driver.pid",
+    "measurement-complete.json",
+    "measurement-started.json",
+    "process-samples.jsonl",
+    "ray-head-metrics-error.log",
+    "ray-head-metrics.prom",
+    "ray-metrics-samples.prom",
+    "ray-worker-1-metrics-error.log",
+    "ray-worker-1-metrics.prom",
+    "ray-worker-2-metrics-error.log",
+    "ray-worker-2-metrics.prom",
+    "resources.json",
+    "resource-baseline-ready",
     "warmup.log",
 }
+_RESOURCE_CASE_FILES = frozenset(
+    {
+        "docker-stats.jsonl",
+        "driver.pid",
+        "measurement-complete.json",
+        "measurement-started.json",
+        "process-samples.jsonl",
+        "ray-head-metrics-error.log",
+        "ray-head-metrics.prom",
+        "ray-metrics-samples.prom",
+        "ray-worker-1-metrics-error.log",
+        "ray-worker-1-metrics.prom",
+        "ray-worker-2-metrics-error.log",
+        "ray-worker-2-metrics.prom",
+        "resources.json",
+        "resource-baseline-ready",
+    }
+)
 _CASE_DIR = re.compile(r"^[a-z0-9][a-z0-9_-]{2,160}$")
 _JSON_FIELDS = {
     "docker-context-manifest.json": frozenset(
@@ -807,12 +839,11 @@ def collect_case_evidence(
         if not isinstance(value, dict):
             raise ValueError(f"case result must be an object: {path}")
         resources_path = path.with_name("resources.json")
-        if not resources_path.is_file():
-            raise ValueError(f"case resource summary is missing: {resources_path}")
-        resources = json.loads(resources_path.read_text(encoding="utf-8"))
-        if not isinstance(resources, dict) or not isinstance(value.get("metrics"), dict):
-            raise ValueError(f"case resource summary must be an object: {resources_path}")
-        value["metrics"].update(resources)
+        if resources_path.is_file():
+            resources = json.loads(resources_path.read_text(encoding="utf-8"))
+            if not isinstance(resources, dict) or not isinstance(value.get("metrics"), dict):
+                raise ValueError(f"case resource summary must be an object: {resources_path}")
+            value["metrics"].update(resources)
         case_queries_path = path.with_name("queries.jsonl")
         case_queries = read_jsonl(case_queries_path) if case_queries_path.is_file() else ()
         if int(value["metrics"].get("query_count", -1)) != len(case_queries):
@@ -892,6 +923,8 @@ def _expected_cases(mode: str, scenarios_path: Path) -> dict[str, Any]:
 
 def _required_case_files(scenario: Any) -> set[str]:
     required = set(_COMMON_CASE_FILES)
+    if scenario.resource_metrics_required:
+        required.update(_RESOURCE_CASE_FILES)
     if scenario.warmup:
         required.add("warmup.log")
     if scenario.id == "read.error.permission":

@@ -108,6 +108,8 @@ runtime_image_owned=0
 baseline_recorded=0
 active_project=""
 active_case_dir=""
+cluster_control_dir=""
+scenario_list=""
 
 docker_cmd() {
     env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
@@ -121,6 +123,7 @@ compose_cmd() {
 }
 
 normalize_case_evidence() {
+    local case_name=$1
     local owner
     owner="$(id -u):$(id -g)"
     if [[ ! "$owner" =~ ^[0-9]+:[0-9]+$ ]]; then
@@ -128,9 +131,9 @@ normalize_case_evidence() {
         return 1
     fi
     compose_cmd exec -T ray-head /bin/bash -lc \
-        "find /evidence -xdev -exec chown --no-dereference '$owner' {} + \\
-        && find /evidence -xdev -type d -exec chmod u+rwx {} + \\
-        && find /evidence -xdev -type f -exec chmod u+rw {} +"
+        "find '/evidence/$case_name' /control -xdev -exec chown --no-dereference '$owner' {} + \\
+        && find '/evidence/$case_name' /control -xdev -type d -exec chmod u+rwx {} + \\
+        && find '/evidence/$case_name' /control -xdev -type f -exec chmod u+rw {} +"
 }
 
 record_docker_state() {
@@ -141,13 +144,16 @@ record_docker_state() {
     docker_cmd system df >"$artifact_dir/docker-system-df-$phase.txt"
 }
 
-cleanup_case() {
+finish_cluster() {
     if [[ -z "$active_project" ]]; then
         return
     fi
     cleanup_status=0
-    compose_cmd logs --no-color >"$active_case_dir/compose.log" 2>&1 || cleanup_status=1
-    compose_cmd images >"$active_case_dir/compose-images.txt" 2>&1 || cleanup_status=1
+    # Emit one shared lifecycle log to the workflow/orchestration log. Per-case
+    # metadata already records the shared project without duplicating this log
+    # into every case artifact.
+    compose_cmd logs --no-color || cleanup_status=1
+    compose_cmd images || cleanup_status=1
     if ! compose_cmd down --volumes --remove-orphans; then
         cleanup_status=1
         compose_cmd down --volumes --remove-orphans || true
@@ -159,8 +165,46 @@ cleanup_case() {
     else
         active_project=""
         active_case_dir=""
+        cluster_control_dir=""
     fi
     return "$cleanup_status"
+}
+
+start_cluster() {
+    local cluster_name=$1
+    local runtime_side=${2:-official}
+    if [[ "$runtime_side" != "official" && "$runtime_side" != "external" ]]; then
+        echo "unsupported comparison runtime side: $runtime_side" >&2
+        return 1
+    fi
+    if [[ -n "$active_project" ]]; then
+        echo "comparison Compose project is already active: $active_project" >&2
+        return 1
+    fi
+    active_project="raychcmp-${run_stamp//[!0-9]/}-${cluster_name}"
+    export RAY_COMPARISON_RUNTIME="$runtime_side"
+    export RAY_COMPARISON_ARTIFACT_DIR="$artifact_dir"
+    cluster_control_dir="$temporary_root/control-$cluster_name"
+    export RAY_COMPARISON_CONTROL_DIR="$cluster_control_dir"
+    mkdir -p "$cluster_control_dir"
+    compose_cmd config >"$temporary_root/compose-config.yaml"
+    compose_cmd up --detach --wait --no-build
+    ready=false
+    : >"$temporary_root/ray-ready.log"
+    for _ in $(seq 1 6); do
+        if run_with_timeout 10 compose_cmd exec -T ray-head \
+            /opt/ray-clickhouse/official/bin/python -c \
+            "import ray; ray.init(address='auto'); assert len([n for n in ray.nodes() if n['Alive']]) >= 3; ray.shutdown()" \
+            >>"$temporary_root/ray-ready.log" 2>&1; then
+            ready=true
+            break
+        fi
+        sleep 0.5
+    done
+    if [[ "$ready" != "true" ]]; then
+        echo "Ray comparison cluster did not become ready" >&2
+        return 1
+    fi
 }
 
 cleanup() {
@@ -168,7 +212,7 @@ cleanup() {
     trap - EXIT
     set +e
     cleanup_status=0
-    cleanup_case || cleanup_status=1
+    finish_cluster || cleanup_status=1
     if [[ "$runtime_image_owned" -eq 1 ]] && docker_cmd image inspect "$runtime_image" >/dev/null 2>&1; then
         docker_cmd image rm "$runtime_image" >"$artifact_dir/runtime-image-cleanup.log" 2>&1 \
             || cleanup_status=1
@@ -403,7 +447,7 @@ wait_for_fault_and_kill_worker() {
         # The event is written by the container user on a bind mount. Read it
         # inside ray-head so host-side polling does not depend on its ownership.
         event_json=$(compose_cmd exec -T ray-head /bin/cat \
-            /evidence/control/fault-event.json 2>/dev/null || true)
+            /control/fault-event.json 2>/dev/null || true)
         if [[ -n "$event_json" ]]; then
             client_ip=$(printf '%s\n' "$event_json" | sed -nE 's/.*"client_ip": "([^"]+)".*/\1/p')
             case "$client_ip" in
@@ -434,42 +478,31 @@ run_case() {
     warmup=$6
     resource_required=$7
     safe_case=$(printf '%s-%s-%s-%s' "$side" "$scenario" "$fault" "$repetition" | tr '.:' '--')
-    case_hash=$(printf '%s' "$safe_case" | shasum -a 256 | cut -c1-12)
-    active_project="raychcmp-${run_stamp//[!0-9]/}-${case_hash}"
     active_case_dir="$artifact_dir/$safe_case"
     mkdir -p "$active_case_dir/control"
-    export RAY_COMPARISON_RUNTIME="$side"
-    export RAY_COMPARISON_ARTIFACT_DIR="$active_case_dir"
-
-    existing=$(compose_cmd ps --all --quiet)
-    if [[ -n "$existing" ]]; then
-        echo "comparison Compose project already has resources: $active_project" >&2
+    if [[ -z "$active_project" ]]; then
+        echo "comparison Compose project is not active: $safe_case" >&2
         return 1
     fi
-    compose_cmd config >"$active_case_dir/compose-config.yaml"
-    compose_cmd up --detach --wait --no-build
-    ready=false
-    : >"$active_case_dir/ray-ready.log"
-    for _ in $(seq 1 6); do
-        if run_with_timeout 10 compose_cmd exec -T ray-head \
-            "/opt/ray-clickhouse/$side/bin/python" -c \
-            "import ray; ray.init(address='auto'); assert len([n for n in ray.nodes() if n['Alive']]) >= 3; ray.shutdown()" \
-            >>"$active_case_dir/ray-ready.log" 2>&1; then
-            ready=true
-            break
-        fi
-        sleep 0.5
-    done
-    if [[ "$ready" != "true" ]]; then
-        echo "Ray comparison cluster did not become ready" >&2
-        return 1
+    cp "$temporary_root/compose-config.yaml" "$active_case_dir/compose-config.yaml"
+    {
+        printf 'shared comparison cluster: %s\n' "$active_project"
+        compose_cmd ps --all
+    } >"$active_case_dir/compose.log" 2>&1 || return 1
+    compose_cmd images >"$active_case_dir/compose-images.txt" 2>&1 || return 1
+    cp "$temporary_root/ray-ready.log" "$active_case_dir/ray-ready.log"
+    case_prefix="/evidence/$safe_case"
+    export RAY_COMPARISON_RUNTIME="$side"
+    collect_resources=false
+    if [[ "$mode" != "formal" || "$resource_required" == "true" ]]; then
+        collect_resources=true
     fi
 
     compose_cmd exec -T ray-head "/opt/ray-clickhouse/$side/bin/python" \
         -m ray_clickhouse_comparison prepare \
         --side "$side" --scenario "$scenario" --mode "$mode" \
         --scenarios /workspace/ray-clickhouse/comparison/official/config/scenarios.toml \
-        --expected-identity /evidence/expected-identity.json \
+        --expected-identity "$case_prefix/expected-identity.json" \
         >"$active_case_dir/prepare.log" 2>&1
     if [[ "$warmup" == "true" ]]; then
         compose_cmd exec -T ray-head "/opt/ray-clickhouse/$side/bin/python" \
@@ -482,52 +515,72 @@ run_case() {
     command=(
         compose_cmd exec -T ray-head
         env "RAY_COMPARISON_PAIR_POSITION=$pair_position"
-        "RAY_COMPARISON_QUERY_EVIDENCE=/evidence/queries.jsonl"
-        "RAY_COMPARISON_TASK_EVIDENCE=/evidence/tasks.jsonl"
-        "RAY_COMPARISON_MEASUREMENT_STARTED=/evidence/measurement-started.json"
-        "RAY_COMPARISON_MEASUREMENT_COMPLETE=/evidence/measurement-complete.json"
-        "RAY_COMPARISON_DRIVER_PID_FILE=/evidence/driver.pid"
-        "RAY_COMPARISON_RESOURCE_BASELINE_READY=/evidence/resource-baseline-ready"
+        "RAY_COMPARISON_QUERY_EVIDENCE=$case_prefix/queries.jsonl"
+        "RAY_COMPARISON_TASK_EVIDENCE=$case_prefix/tasks.jsonl"
+        "RAY_COMPARISON_MEASUREMENT_STARTED=$case_prefix/measurement-started.json"
+        "RAY_COMPARISON_MEASUREMENT_COMPLETE=$case_prefix/measurement-complete.json"
+        "RAY_COMPARISON_DRIVER_PID_FILE=$case_prefix/driver.pid"
+        "RAY_COMPARISON_WORKER_KILL_MARKER=$case_prefix/killed-worker.txt"
         "/opt/ray-clickhouse/$side/bin/python" -m ray_clickhouse_comparison
         run --side "$side" --scenario "$scenario"
         --run-id "$run_id" --repetition "$repetition"
         --reference /workspace/ray-clickhouse/comparison/official/config/reference.toml
         --scenarios /workspace/ray-clickhouse/comparison/official/config/scenarios.toml
-        --output "/evidence/result.json"
+        --output "$case_prefix/result.json"
         --result-schema /workspace/ray-clickhouse/comparison/official/schema/result.schema.json
-        --control-dir /evidence/control
-        --expected-identity /evidence/expected-identity.json
+        --control-dir /control
+        --expected-identity "$case_prefix/expected-identity.json"
     )
+    if [[ "$collect_resources" == "true" ]]; then
+        command=(
+            "${command[@]:0:7}"
+            "RAY_COMPARISON_RESOURCE_BASELINE_READY=$case_prefix/resource-baseline-ready"
+            "${command[@]:7}"
+        )
+    fi
 
     set +e
     "${command[@]}" >"$active_case_dir/ray-job.log" 2>&1 &
     job_pid=$!
-    sample_resources "$job_pid" "$resource_required" &
-    sampler_pid=$!
+    sampler_pid=0
+    sampler_status=0
+    if [[ "$collect_resources" == "true" ]]; then
+        sample_resources "$job_pid" "$resource_required" &
+        sampler_pid=$!
+    fi
     kill_status=0
     if [[ "$fault" == "hold_response" ]]; then
         wait_for_fault_and_kill_worker "$active_case_dir/control/fault-event.json" || kill_status=$?
     fi
     wait "$job_pid"
     job_status=$?
-    wait "$sampler_pid" 2>/dev/null
-    sampler_status=$?
+    if [[ "$sampler_pid" -ne 0 ]]; then
+        wait "$sampler_pid" 2>/dev/null
+        sampler_status=$?
+    fi
     set -e
 
-    normalize_case_evidence
-    capture_ray_metrics
+    normalize_case_evidence "$safe_case"
+    if [[ "$fault" != "none" ]]; then
+        for control_file in fault-control.json fault-event.json; do
+            cp "$cluster_control_dir/$control_file" "$active_case_dir/control/$control_file"
+        done
+    fi
+    if [[ "$collect_resources" == "true" ]]; then
+        capture_ray_metrics
+    fi
     if [[ "$job_status" -ne 0 || "$kill_status" -ne 0 || "$sampler_status" -ne 0 ]]; then
         echo "comparison case failed: $safe_case" >&2
         return 1
     fi
-    if [[ "$resource_required" == "true" ]]; then
+    if [[ "$collect_resources" == "true" && "$resource_required" == "true" ]]; then
         uv run --project comparison/official ray-clickhouse-comparison resource-summary \
             --docker-stats "$active_case_dir/docker-stats.jsonl" \
             --process-samples "$active_case_dir/process-samples.jsonl" \
             --ray-metrics "$active_case_dir/ray-metrics-samples.prom" \
             --require-complete \
             --output "$active_case_dir/resources.json"
-    else
+    elif [[ "$collect_resources" == "true" ]]; then
         uv run --project comparison/official ray-clickhouse-comparison resource-summary \
             --docker-stats "$active_case_dir/docker-stats.jsonl" \
             --process-samples "$active_case_dir/process-samples.jsonl" \
@@ -545,27 +598,33 @@ run_case() {
             -m ray_clickhouse_comparison cleanup-permission \
             >"$active_case_dir/permission-cleanup.log" 2>&1 || return 1
     fi
-    cleanup_case
 }
 
-if [[ "$mode" == "smoke" ]]; then
-    # The smoke fixture is intentionally small; sparse per-service Ray Object Store
-    # series are recorded as incomplete diagnostics, while formal resource scenarios
-    # remain strict and fail closed.
-    run_case official read.default.single 0 0 none true false
-    run_case external read.default.single 0 1 none true false
-    run_case external write.transport.post_commit 0 0 drop_response false false
-    run_case official write.worker.post_commit 0 0 hold_response false false
-elif [[ "$mode" == "dry-run" ]]; then
-    # Dry-run uses the bounded fixture profile to validate behavior and artifact flow;
-    # formal runs are the only remote profile that makes resource conclusions.
-    run_case official read.controlled.ordered 0 0 none true false
-    run_case external read.controlled.ordered 0 1 none true false
-else
-    # Keep the scenario stream on a dedicated descriptor. Commands in run_case
-    # may inherit stdin (for example docker compose exec), and must not consume
-    # the remaining scenario definitions.
-    while IFS=$'\t' read -r scenario fault warmup resource_required repetitions sides <&3; do
+scenario_list="$temporary_root/scenarios.tsv"
+uv run --project comparison/official python -c \
+    "from pathlib import Path; from ray_clickhouse_comparison.config import load_scenarios; [print(s.id, s.fault, str(s.warmup).lower(), str(s.resource_metrics_required).lower(), s.repetitions, ','.join(s.sides), sep='\\t') for s in load_scenarios(Path('comparison/official/config/scenarios.toml'))]" \
+    >"$scenario_list"
+
+run_shared_behavior_suite() {
+    for side in official external; do
+        start_cluster "behavior-$side" "$side"
+        while IFS=$'\t' read -r scenario fault warmup resource_required repetitions sides; do
+            [[ "$resource_required" == "true" || "$fault" == "hold_response" ]] && continue
+            [[ ",${sides}," == *",$side,"* ]] || continue
+            for repetition in $(seq 0 $((repetitions - 1))); do
+                pair_position=0
+                [[ "$side" == "external" ]] && pair_position=1
+                run_case "$side" "$scenario" "$repetition" "$pair_position" "$fault" \
+                    "$warmup" false
+            done
+        done <"$scenario_list"
+        finish_cluster
+    done
+}
+
+run_resource_suite() {
+    while IFS=$'\t' read -r scenario fault warmup resource_required repetitions sides; do
+        [[ "$resource_required" != "true" ]] && continue
         for repetition in $(seq 0 $((repetitions - 1))); do
             IFS=',' read -r first_side second_side <<<"$sides"
             if (( repetition % 2 == 1 )); then
@@ -573,13 +632,71 @@ else
                 first_side=$second_side
                 second_side=$swap
             fi
-            run_case "$first_side" "$scenario" "$repetition" 0 "$fault" \
-                "$warmup" "$resource_required"
-            run_case "$second_side" "$scenario" "$repetition" 1 "$fault" \
-                "$warmup" "$resource_required"
+            for side_position in 0 1; do
+                side=$first_side
+                [[ "$side_position" -eq 1 ]] && side=$second_side
+                cluster_name=$(printf 'resource-%s-%s-%s' "$scenario" "$repetition" "$side" | tr '.:' '--')
+                start_cluster "$cluster_name" "$side"
+                run_case "$side" "$scenario" "$repetition" "$side_position" "$fault" \
+                    "$warmup" true
+                finish_cluster
+            done
         done
-    done 3< <(uv run --project comparison/official python -c \
-        "from pathlib import Path; from ray_clickhouse_comparison.config import load_scenarios; [print(s.id, s.fault, str(s.warmup).lower(), str(s.resource_metrics_required).lower(), s.repetitions, ','.join(s.sides), sep='\\t') for s in load_scenarios(Path('comparison/official/config/scenarios.toml'))]")
+    done <"$scenario_list"
+}
+
+run_worker_fault_suite() {
+    while IFS=$'\t' read -r scenario fault warmup resource_required repetitions sides; do
+        [[ "$fault" != "hold_response" ]] && continue
+        for repetition in $(seq 0 $((repetitions - 1))); do
+            IFS=',' read -r first_side second_side <<<"$sides"
+            if (( repetition % 2 == 1 )); then
+                swap=$first_side
+                first_side=$second_side
+                second_side=$swap
+            fi
+            for side_position in 0 1; do
+                side=$first_side
+                [[ "$side_position" -eq 1 ]] && side=$second_side
+                cluster_name=$(printf 'fault-%s-%s-%s' "$scenario" "$repetition" "$side" | tr '.:' '--')
+                start_cluster "$cluster_name" "$side"
+                run_case "$side" "$scenario" "$repetition" "$side_position" "$fault" \
+                    "$warmup" false
+                finish_cluster
+            done
+        done
+    done <"$scenario_list"
+}
+
+if [[ "$mode" == "smoke" ]]; then
+    # The smoke fixture is intentionally small; sparse per-service Ray Object Store
+    # series are recorded as incomplete diagnostics, while formal resource scenarios
+    # remain strict and fail closed.
+    start_cluster smoke-official official
+    run_case official read.default.single 0 0 none true false
+    run_case official write.worker.post_commit 0 0 hold_response false false
+    finish_cluster
+    start_cluster smoke-external external
+    run_case external read.default.single 0 1 none true false
+    run_case external write.transport.post_commit 0 0 drop_response false false
+    finish_cluster
+elif [[ "$mode" == "dry-run" ]]; then
+    # Dry-run uses the bounded fixture profile to validate behavior and artifact flow;
+    # formal runs are the only remote profile that makes resource conclusions.
+    start_cluster dry-run-official official
+    run_case official read.controlled.ordered 0 0 none true false
+    finish_cluster
+    start_cluster dry-run-external external
+    run_case external read.controlled.ordered 0 1 none true false
+    finish_cluster
+else
+    # Resource measurements retain a clean cluster per side and repetition. Contract,
+    # error, and transport-fault scenarios reuse one shared cluster per runtime side
+    # like ray-doris; worker-loss pairs get isolated clusters because the injected kill
+    # is terminal and each side has a distinct worker runtime.
+    run_resource_suite
+    run_shared_behavior_suite
+    run_worker_fault_suite
 fi
 
 uv run --project comparison/official ray-clickhouse-comparison collect \

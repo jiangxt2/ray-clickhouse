@@ -103,7 +103,7 @@ def test_comparison_image_is_built_once_and_compose_never_builds() -> None:
     assert "uv build comparison/official --wheel --force-pep517 --no-cache" in runner
     assert "ray-clickhouse-comparison verify-wheel" in runner
     assert "ray-clickhouse-comparison context-manifest" in runner
-    assert "compose_cmd up --detach --wait --no-build" in runner
+    assert runner.count("compose_cmd up --detach --wait --no-build") == 1
     assert "build:" not in compose
     assert '$(basename "${external_wheels[0]}")' in runner
     assert "/tmp/external-wheel/*.whl" in dockerfile
@@ -152,7 +152,7 @@ def test_comparison_image_is_built_once_and_compose_never_builds() -> None:
     assert "artifact directory must be absent or empty" in runner
     assert "cleanup_temporary_root" in runner
     assert "normalize_case_evidence" in runner
-    assert "find /evidence -xdev -exec chown --no-dereference" in runner
+    assert "find '/evidence/$case_name' /control -xdev -exec chown --no-dereference" in runner
     assert "sparse per-service Ray Object Store" in runner
     assert "run_case official read.default.single 0 0 none true false" in runner
     assert "run_case external read.default.single 0 1 none true false" in runner
@@ -166,6 +166,15 @@ def test_comparison_image_is_built_once_and_compose_never_builds() -> None:
     assert "RAY_COMPARISON_RAY_ADDRESS: auto" in compose
     assert "RAY_COMPARISON_RUNTIME: ${RAY_COMPARISON_RUNTIME" in compose
     assert "ray.init(address='auto')" in runner
+    assert "RAY_COMPARISON_CONTROL_DIR" in runner
+    assert "RAY_COMPARISON_WORKER_KILL_MARKER" in runner
+    assert "start_cluster" in runner
+    assert "finish_cluster" in runner
+    assert "run_shared_behavior_suite" in runner
+    assert "run_resource_suite" in runner
+    assert "run_worker_fault_suite" in runner
+    assert "clean cluster per side and repetition" in runner
+    assert "target: /control" in compose
 
 
 def test_package_initializer_has_no_runtime_import_side_effects() -> None:

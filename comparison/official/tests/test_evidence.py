@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from ray_clickhouse_comparison.config import load_scenarios
 from ray_clickhouse_comparison.evidence import (
+    _required_case_files,
     artifact_record,
     atomic_write_json,
     build_context_manifest,
@@ -203,10 +205,10 @@ def test_complete_tree_requires_operational_logs_and_telemetry(tmp_path: Path) -
         json.dumps({"environment": {"mode": "smoke"}}), encoding="utf-8"
     )
     cases = (
-        ("official", "read.default.single", "none", True),
-        ("external", "read.default.single", "none", True),
-        ("external", "write.transport.post_commit", "drop_response", False),
-        ("official", "write.worker.post_commit", "hold_response", False),
+        ("official", "read.default.single", "none", True, True),
+        ("external", "read.default.single", "none", True, True),
+        ("external", "write.transport.post_commit", "drop_response", False, False),
+        ("official", "write.worker.post_commit", "hold_response", False, False),
     )
     case_files = (
         "compose-config.yaml",
@@ -235,11 +237,29 @@ def test_complete_tree_requires_operational_logs_and_telemetry(tmp_path: Path) -
         "tasks.jsonl",
     )
     result_rows = []
-    for side, scenario_id, fault, warmup in cases:
+    resource_files = {
+        "docker-stats.jsonl",
+        "driver.pid",
+        "measurement-complete.json",
+        "measurement-started.json",
+        "process-samples.jsonl",
+        "ray-head-metrics-error.log",
+        "ray-head-metrics.prom",
+        "ray-metrics-samples.prom",
+        "ray-worker-1-metrics-error.log",
+        "ray-worker-1-metrics.prom",
+        "ray-worker-2-metrics-error.log",
+        "ray-worker-2-metrics.prom",
+        "resources.json",
+        "resource-baseline-ready",
+    }
+    for side, scenario_id, fault, warmup, resource_required in cases:
         case_name = f"{side}-{scenario_id.replace('.', '-')}-{fault}-0"
         case = source / case_name
         case.mkdir()
         for name in case_files:
+            if name in resource_files and not resource_required:
+                continue
             case.joinpath(name).write_text("{}\n", encoding="utf-8")
         if warmup:
             case.joinpath("warmup.log").write_text("ok\n", encoding="utf-8")
@@ -265,6 +285,19 @@ def test_complete_tree_requires_operational_logs_and_telemetry(tmp_path: Path) -
     (source / "official-read-default-single-none-0/ray-job.log").unlink()
     with pytest.raises(ValueError, match="ray-job.log"):
         validate_complete_tree(source, mode="smoke", scenarios_path=ROOT / "config/scenarios.toml")
+
+
+def test_required_case_files_scope_resource_telemetry_to_resource_scenarios() -> None:
+    scenarios = {
+        scenario.id: scenario for scenario in load_scenarios(ROOT / "config/scenarios.toml")
+    }
+
+    assert "resources.json" in _required_case_files(scenarios["read.default.single"])
+    assert "ray-metrics-samples.prom" in _required_case_files(scenarios["read.default.single"])
+    assert "resources.json" not in _required_case_files(scenarios["contract.types"])
+    assert "process-samples.jsonl" not in _required_case_files(
+        scenarios["write.transport.post_commit"]
+    )
 
 
 def test_pip_report_identity_binds_selected_wheel_hash(tmp_path: Path) -> None:
