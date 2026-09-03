@@ -400,8 +400,12 @@ capture_ray_metrics() {
 wait_for_fault_and_kill_worker() {
     event_path=$1
     for _ in $(seq 1 300); do
-        if [[ -s "$event_path" ]]; then
-            client_ip=$(sed -nE 's/.*"client_ip": "([^"]+)".*/\1/p' "$event_path")
+        # The event is written by the container user on a bind mount. Read it
+        # inside ray-head so host-side polling does not depend on its ownership.
+        event_json=$(compose_cmd exec -T ray-head /bin/cat \
+            /evidence/control/fault-event.json 2>/dev/null || true)
+        if [[ -n "$event_json" ]]; then
+            client_ip=$(printf '%s\n' "$event_json" | sed -nE 's/.*"client_ip": "([^"]+)".*/\1/p')
             case "$client_ip" in
                 10.251.0.11) service=ray-worker-1 ;;
                 10.251.0.12) service=ray-worker-2 ;;
@@ -417,7 +421,7 @@ wait_for_fault_and_kill_worker() {
         fi
         sleep 0.2
     done
-    echo "timed out waiting for one-shot worker-loss boundary" >&2
+    echo "timed out waiting for one-shot worker-loss boundary: $event_path" >&2
     return 1
 }
 
