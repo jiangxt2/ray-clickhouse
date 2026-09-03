@@ -72,7 +72,9 @@ jobs:
           PREDECESSOR_DIGEST: ${{ inputs.predecessor_receipt_artifact_digest }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
-          test "${GITHUB_REF}" = "refs/heads/master"
+          # workflow_ref and the source CI run below pin this dispatch to the
+          # default-branch release workflow; API-created dispatches may not set
+          # GITHUB_REF even when ref=master is supplied.
           test "${WORKFLOW_REF}" = \
             "jiangxt2/ray-clickhouse/.github/workflows/release.yml@refs/heads/master"
           [[ "${SOURCE_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
