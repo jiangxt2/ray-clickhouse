@@ -58,6 +58,7 @@ class ClickHouseReadConfig:
     target_tasks: int = 8
     max_tasks: int = 256
     limits: ResourceLimits = field(default_factory=ResourceLimits)
+    diagnostic_flush_logs: bool = False
 
     def __post_init__(self) -> None:
         if self.split not in {"single", "partition", "range"}:
@@ -78,6 +79,8 @@ class ClickHouseReadConfig:
             raise ConfigurationError("max_tasks must be an integer")
         if self.target_tasks < 1 or self.max_tasks < self.target_tasks:
             raise ConfigurationError("max_tasks must be >= target_tasks")
+        if not isinstance(self.diagnostic_flush_logs, bool):
+            raise ConfigurationError("diagnostic_flush_logs must be a boolean")
 
     def __repr__(self) -> str:
         parameter_names = tuple(name for name, _ in self.query_parameters)
@@ -228,7 +231,12 @@ class ClickHouseDatasource(Datasource):
         )
 
         def read_fn() -> Any:
-            yield from stream_query(config.connection, query, config.limits)
+            yield from stream_query(
+                config.connection,
+                query,
+                config.limits,
+                diagnostic_flush_logs=config.diagnostic_flush_logs,
+            )
 
         return make_read_task(
             read_fn,

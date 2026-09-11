@@ -75,6 +75,7 @@ def read_clickhouse(
     query_parameters: Mapping[str, Any] | None = None,
     settings: Mapping[str, Any] | None = None,
     client_options: Mapping[str, Any] | None = None,
+    diagnostic_flush_logs: bool = False,
     concurrency: int | None = None,
     override_num_blocks: int | None = None,
     ray_remote_args: Mapping[str, Any] | None = None,
@@ -106,6 +107,7 @@ def read_clickhouse(
         discovery_policy=discovery_policy,
         target_tasks=target_tasks,
         max_tasks=max_tasks,
+        diagnostic_flush_logs=diagnostic_flush_logs,
         limits=ResourceLimits(
             batch_rows=batch_rows,
             batch_bytes=batch_bytes,

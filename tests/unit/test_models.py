@@ -48,9 +48,25 @@ def test_connection_rejects_reserved_client_options() -> None:
         )
 
 
+def test_connection_rejects_reserved_log_comment() -> None:
+    with pytest.raises(ConfigurationError):
+        ClickHouseConnection.from_options(
+            host="clickhouse",
+            database="analytics",
+            username="reader",
+            password="",
+            password_env=None,
+            port=8123,
+            secure=False,
+            settings={"log_comment": "custom"},
+            client_options=None,
+        )
+
+
 def test_connection_disables_driver_retries() -> None:
     connection = ClickHouseConnection(host="clickhouse", database="analytics")
-    assert connection.client_kwargs(ResourceLimits())["query_retries"] == 0
+    kwargs = connection.client_kwargs(ResourceLimits())
+    assert kwargs["query_retries"] == 0
 
 
 def test_resource_limits_validate_task_bounds() -> None:

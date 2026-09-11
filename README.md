@@ -70,6 +70,26 @@ write_clickhouse(
 )
 ```
 
+When diagnosing an Arrow or transport failure, set `diagnostic_flush_logs=True` on
+`read_clickhouse()` if the ClickHouse account may run `SYSTEM FLUSH LOGS`:
+
+```python
+dataset = read_clickhouse(
+    host="clickhouse.example",
+    database="analytics",
+    table="events",
+    diagnostic_flush_logs=True,
+)
+```
+
+Read failures retain the original client exception and generated query ID. The
+connector performs a bounded, best-effort lookup in the discovered ClickHouse
+query-log table and appends the server exception code and message when available.
+It never replays the failed SQL; if query logging is unavailable, the original
+exception and query ID remain the authoritative result. The diagnostic text is
+server-provided and may include query context, so do not put credentials in query
+predicates or parameters.
+
 `filter` is a trusted predicate fragment, not an arbitrary SQL query. Values must be passed through
 `query_parameters`; the connector does not execute arbitrary SQL or provide delete, update,
 upsert, connector-side Distributed shard routing, or exactly-once semantics. `write_mode="overwrite"`

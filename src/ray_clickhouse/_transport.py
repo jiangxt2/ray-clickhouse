@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import math
+import re
+import time
 import uuid
 from collections.abc import Iterator
 from typing import Any
@@ -19,6 +22,22 @@ from ray_clickhouse._errors import (
     WriteError,
 )
 from ray_clickhouse._models import ClickHouseConnection, QuerySpec, ResourceLimits
+
+logger = logging.getLogger(__name__)
+
+_QUERY_LOG_LOOKUP_ATTEMPTS = 4
+_QUERY_LOG_LOOKUP_DELAY_SECONDS = 0.15
+_QUERY_LOG_COLUMNS = (
+    "type",
+    "exception_code",
+    "exception",
+    "read_rows",
+    "result_rows",
+    "read_bytes",
+    "result_bytes",
+    "query_duration_ms",
+)
+_QUERY_LOG_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def iter_batch_slices(
@@ -85,14 +104,165 @@ def _new_query_id(operation: str) -> str:
     return f"ray-clickhouse-{operation}-{uuid.uuid4()}"
 
 
+def _lookup_query_diagnostic(
+    connection: ClickHouseConnection,
+    limits: ResourceLimits,
+    query_id: str,
+    log_comment: str,
+    *,
+    flush_logs: bool,
+) -> dict[str, object] | None:
+    """Best-effort lookup of a failed query in ClickHouse query_log.
+
+    This runs only on a read failure, uses a fresh client, and never replaces the
+    original read exception if the diagnostic query is unavailable.
+    """
+    settings = connection.query_settings(limits)
+    settings["max_execution_time"] = 2
+    diagnostic_client: Any | None = None
+    try:
+        import clickhouse_connect
+
+        diagnostic_client = clickhouse_connect.get_client(
+            **connection.client_kwargs(limits)
+        )
+        if flush_logs:
+            try:
+                diagnostic_client.command("SYSTEM FLUSH LOGS")
+            except Exception as exc:
+                logger.debug(
+                    "SYSTEM FLUSH LOGS unavailable for query_id=%s: %s",
+                    query_id,
+                    exc,
+                )
+        query_log_table = _discover_query_log_table(
+            diagnostic_client,
+            settings=settings,
+            query_id=query_id,
+        )
+        if query_log_table is None:
+            return None
+        query = (
+            "SELECT type, exception_code, exception, read_rows, result_rows, "
+            "read_bytes, result_bytes, query_duration_ms "
+            f"FROM system.`{query_log_table}` "
+            "WHERE query_id = {query_id:String} "
+            "OR log_comment = {log_comment:String} "
+            "ORDER BY event_time_microseconds DESC"
+        )
+        for attempt in range(_QUERY_LOG_LOOKUP_ATTEMPTS):
+            try:
+                result = diagnostic_client.query(
+                    query,
+                    parameters={"query_id": query_id, "log_comment": log_comment},
+                    settings=settings,
+                    transport_settings={
+                        "query_id": _new_query_id("query-log-diagnostic")
+                    },
+                )
+                if result.result_rows:
+                    row = result.result_rows[0]
+                    return dict(zip(_QUERY_LOG_COLUMNS, row, strict=True))
+            except Exception as exc:
+                logger.debug(
+                    "query_log diagnostic lookup failed for query_id=%s: %s",
+                    query_id,
+                    exc,
+                )
+                return None
+            if attempt + 1 < _QUERY_LOG_LOOKUP_ATTEMPTS:
+                time.sleep(_QUERY_LOG_LOOKUP_DELAY_SECONDS)
+    except Exception as exc:
+        logger.debug(
+            "query_log diagnostic client failed for query_id=%s: %s",
+            query_id,
+            exc,
+        )
+    finally:
+        if diagnostic_client is not None:
+            try:
+                diagnostic_client.close()
+            except Exception:
+                logger.debug(
+                    "query_log diagnostic client close failed for query_id=%s",
+                    query_id,
+                    exc_info=True,
+                )
+    return None
+
+
+def _discover_query_log_table(
+    client: Any,
+    *,
+    settings: dict[str, Any],
+    query_id: str,
+) -> str | None:
+    try:
+        result = client.query(
+            "SHOW TABLES FROM system LIKE '%query_log%'",
+            settings=settings,
+            transport_settings={"query_id": _new_query_id("query-log-show")},
+        )
+        names = sorted(
+            {
+                str(row[0])
+                for row in result.result_rows
+                if row and isinstance(row[0], str) and _QUERY_LOG_NAME.fullmatch(row[0])
+            }
+        )
+        if not names:
+            return None
+        if "query_log" in names:
+            return "query_log"
+        return next(
+            (name for name in names if name.lower().endswith("query_log")),
+            names[0],
+        )
+    except Exception as exc:
+        logger.debug(
+            "query_log table discovery failed for query_id=%s: %s", query_id, exc
+        )
+        return None
+
+
+def _annotate_read_error(
+    error: RayClickHouseError,
+    *,
+    connection: ClickHouseConnection,
+    limits: ResourceLimits,
+    query_id: str,
+    log_comment: str,
+    query_started: bool,
+    flush_logs: bool,
+) -> RayClickHouseError:
+    diagnostic = (
+        _lookup_query_diagnostic(
+            connection,
+            limits,
+            query_id,
+            log_comment,
+            flush_logs=flush_logs,
+        )
+        if query_started
+        else None
+    )
+    error.attach_diagnostic(query_id=query_id, diagnostic=diagnostic)
+    return error
+
+
 def stream_query(
     connection: ClickHouseConnection,
     query: QuerySpec,
     limits: ResourceLimits,
+    *,
+    diagnostic_flush_logs: bool = False,
 ) -> Iterator[pa.Table]:
     """Read one query as bounded Arrow blocks and deterministically close the client."""
     client: Any | None = None
     failure: BaseException | None = None
+    query_id = _new_query_id(query.operation)
+    log_comment = f"ray-clickhouse operation={query.operation} query_id={query_id}"
+    query_started = False
     try:
         try:
             import clickhouse_connect
@@ -103,16 +273,19 @@ def stream_query(
                 raise
             raise _translate(exc, operation="read client initialization") from None
         settings = connection.query_settings(limits)
-        settings.setdefault(
-            "log_comment", f"ray-clickhouse operation={query.operation}"
-        )
-        transport_settings = {"query_id": _new_query_id(query.operation)}
+        if diagnostic_flush_logs:
+            settings["log_queries"] = 1
+        # clickhouse-connect 1.5.x sends query settings as URL parameters.  The
+        # server records this value as system.query_log.query_id; passing it via
+        # transport_settings would only create an unrecognized HTTP header.
+        settings["query_id"] = query_id
+        settings["log_comment"] = log_comment
+        query_started = True
         with client.query_arrow_stream(
             query.sql,
             parameters=query.parameter_dict(),
             settings=settings,
             use_strings=True,
-            transport_settings=transport_settings,
         ) as stream:
             for batch in stream:
                 if isinstance(batch, pa.RecordBatch):
@@ -129,11 +302,28 @@ def stream_query(
         failure = exc
         raise
     except RayClickHouseError as exc:
-        failure = exc
-        raise
+        failure = _annotate_read_error(
+            exc,
+            connection=connection,
+            limits=limits,
+            query_id=query_id,
+            log_comment=log_comment,
+            query_started=query_started,
+            flush_logs=diagnostic_flush_logs,
+        )
+        raise failure from None
     except BaseException as exc:
-        failure = exc
-        raise _translate(exc, operation="Arrow query") from None
+        translated = _translate(exc, operation="Arrow query")
+        failure = _annotate_read_error(
+            translated,
+            connection=connection,
+            limits=limits,
+            query_id=query_id,
+            log_comment=log_comment,
+            query_started=query_started,
+            flush_logs=diagnostic_flush_logs,
+        )
+        raise failure from None
     finally:
         if client is not None:
             try:

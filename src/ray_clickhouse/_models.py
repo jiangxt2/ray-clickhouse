@@ -35,7 +35,9 @@ _RESERVED_OPTIONS = frozenset(
         "show_clickhouse_errors",
     }
 )
-_RESERVED_SETTINGS = frozenset({"max_block_size", "max_execution_time", "query_id"})
+_RESERVED_SETTINGS = frozenset(
+    {"max_block_size", "max_execution_time", "query_id", "log_comment"}
+)
 
 
 def validate_identifier(value: str, *, name: str) -> str:

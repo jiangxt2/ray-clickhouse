@@ -13,9 +13,13 @@ from ray_clickhouse import read_clickhouse, write_clickhouse
 from ray_clickhouse._errors import (
     DiscoveryError,
     PermissionError,
+    ReadError,
     SchemaError,
+    TransportError,
     WriteError,
 )
+from ray_clickhouse._models import ClickHouseConnection, QuerySpec, ResourceLimits
+from ray_clickhouse._transport import _discover_query_log_table, stream_query
 
 from .conftest import DATABASE
 
@@ -95,6 +99,14 @@ def _create_materialized_view(client: Any, view: str, source: str) -> None:
     )
 
 
+def _create_midstream_fault_view(client: Any, view: str) -> None:
+    client.command(
+        f"CREATE VIEW `{DATABASE}`.`{view}` AS "
+        "SELECT number, throwIf(number = 100000, 'diagnostic failure') AS marker "
+        "FROM numbers(1000000)"
+    )
+
+
 def _create_distributed_table(client: Any, table: str, source: str) -> bool:
     clusters = client.query(
         "SELECT cluster FROM system.clusters WHERE shard_num = 1 LIMIT 1"
@@ -147,6 +159,100 @@ def test_single_read_streams_arrow_blocks_with_filter(
         if value % 3 == 1
     ]
     assert rows == sorted(expected, key=lambda row: row["id"], reverse=True)
+
+
+@pytest.mark.integration
+def test_arrow_failure_records_query_id_and_best_effort_query_log(
+    clickhouse_client: Any, connection_options: dict[str, object]
+) -> None:
+    view = f"ray_clickhouse_it_fault_{os.getpid()}"
+    _create_midstream_fault_view(clickhouse_client, view)
+    try:
+        connection = ClickHouseConnection(**connection_options)
+        query = QuerySpec(
+            f"SELECT number, marker FROM `{DATABASE}`.`{view}`",
+            (),
+            pa.schema([("number", pa.uint64()), ("marker", pa.uint8())]),
+        )
+        with pytest.raises((ReadError, TransportError)) as exc_info:
+            list(
+                stream_query(
+                    connection,
+                    query,
+                    ResourceLimits(batch_rows=8192),
+                    diagnostic_flush_logs=True,
+                )
+            )
+
+        error = exc_info.value
+        assert error.query_id is not None
+        assert f"query_id={error.query_id}" in str(error)
+        assert error.diagnostic is not None
+        assert error.diagnostic["exception_code"] == 395
+        assert "diagnostic failure" in str(error.diagnostic["exception"])
+        clickhouse_client.command("SYSTEM FLUSH LOGS")
+        rows = clickhouse_client.query(
+            "SELECT query_id, type, exception_code, exception "
+            "FROM system.query_log "
+            "WHERE query_id = %(query_id)s "
+            "ORDER BY event_time_microseconds DESC",
+            parameters={"query_id": error.query_id},
+        ).result_rows
+        assert any(
+            row[0] == error.query_id
+            and row[2] == 395
+            and "diagnostic failure" in row[3]
+            for row in rows
+        )
+    finally:
+        clickhouse_client.command(f"DROP VIEW IF EXISTS `{DATABASE}`.`{view}`")
+
+
+@pytest.mark.integration
+def test_query_failure_discovers_query_log_and_preserves_query_id(
+    clickhouse_client: Any, table_name: str, connection_options: dict[str, object]
+) -> None:
+    connection = ClickHouseConnection(**connection_options)
+    limits = ResourceLimits(batch_rows=8192)
+    assert (
+        _discover_query_log_table(
+            clickhouse_client,
+            settings=connection.query_settings(limits),
+            query_id="integration-query-log-discovery",
+        )
+        is not None
+    )
+    query = QuerySpec(
+        "SELECT throwIf(1, 'diagnostic failure') AS marker",
+        (),
+        pa.schema([("marker", pa.uint8())]),
+    )
+
+    with pytest.raises((ReadError, TransportError)) as exc_info:
+        list(
+            stream_query(
+                connection,
+                query,
+                limits,
+                diagnostic_flush_logs=True,
+            )
+        )
+
+    error = exc_info.value
+    assert error.query_id is not None
+    assert f"query_id={error.query_id}" in str(error)
+    assert error.diagnostic is not None
+    assert error.diagnostic["exception_code"] == 395
+    assert error.diagnostic["exception"]
+    clickhouse_client.command("SYSTEM FLUSH LOGS")
+    rows = clickhouse_client.query(
+        "SELECT query_id, type, exception_code, exception "
+        "FROM system.query_log "
+        "WHERE query_id = %(query_id)s "
+        "ORDER BY event_time_microseconds DESC",
+        parameters={"query_id": error.query_id},
+    ).result_rows
+    assert any(row[0] == error.query_id and row[2] == 395 for row in rows)
 
 
 @pytest.mark.integration
