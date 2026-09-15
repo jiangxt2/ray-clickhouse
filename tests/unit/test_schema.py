@@ -74,6 +74,16 @@ def test_arrow_type_matrix(dtype: pa.DataType, declared: str) -> None:
     assert arrow_compatible(dtype, declared)
 
 
+@pytest.mark.parametrize("dtype", [pa.large_string(), pa.large_binary()])
+def test_arrow_type_matrix_accepts_large_clickhouse_strings(dtype: pa.DataType) -> None:
+    assert arrow_compatible(dtype, "String")
+
+
+def test_arrow_type_matrix_accepts_null_only_nullable_columns() -> None:
+    assert arrow_compatible(pa.null(), "Nullable(String)")
+    assert not arrow_compatible(pa.null(), "String")
+
+
 def test_tuple_type_matrix_checks_nested_fields() -> None:
     source = pa.struct([("first", pa.string()), ("second", pa.int32())])
     wrong_source = pa.struct([("first", pa.string()), ("second", pa.string())])

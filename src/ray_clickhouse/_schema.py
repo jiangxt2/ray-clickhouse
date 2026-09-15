@@ -273,7 +273,9 @@ def _tuple_argument_type(argument: str) -> str:
 
 
 def arrow_compatible(dtype: pa.DataType, declared_type: str) -> bool:
-    parsed, _ = _unwrap(parse_type(declared_type))
+    parsed, nullable = _unwrap(parse_type(declared_type))
+    if pa.types.is_null(dtype):
+        return nullable
     if parsed.name in {
         "String",
         "Enum8",
@@ -283,7 +285,12 @@ def arrow_compatible(dtype: pa.DataType, declared_type: str) -> bool:
         "IPv6",
         "FixedString",
     }:
-        return bool(pa.types.is_string(dtype) or pa.types.is_binary(dtype))
+        return bool(
+            pa.types.is_string(dtype)
+            or pa.types.is_large_string(dtype)
+            or pa.types.is_binary(dtype)
+            or pa.types.is_large_binary(dtype)
+        )
     integer_types: dict[str, Callable[[pa.DataType], bool]] = {
         "Int8": pa.types.is_int8,
         "Int16": pa.types.is_int16,

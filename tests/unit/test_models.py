@@ -33,6 +33,24 @@ def test_connection_resolves_password_per_process(
     assert connection.resolve_password() == "secret"
 
 
+def test_connection_snapshots_environment_password_for_ray_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = ClickHouseConnection(
+        host="clickhouse",
+        database="analytics",
+        password_env="RAY_CLICKHOUSE_TEST_PASSWORD",
+    )
+    monkeypatch.setenv("RAY_CLICKHOUSE_TEST_PASSWORD", "worker-secret")
+
+    distributed = connection.resolve_for_distribution()
+    monkeypatch.delenv("RAY_CLICKHOUSE_TEST_PASSWORD")
+
+    assert distributed.password_env is None
+    assert distributed.resolve_password() == "worker-secret"
+    assert "worker-secret" not in repr(distributed)
+
+
 def test_connection_rejects_reserved_client_options() -> None:
     with pytest.raises(ConfigurationError):
         ClickHouseConnection.from_options(

@@ -7,7 +7,7 @@ import os
 import pickle
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from ray_clickhouse._errors import ConfigurationError
@@ -208,6 +208,16 @@ class ClickHouseConnection:
             raise ConfigurationError(
                 "configured password environment variable is unavailable"
             ) from None
+
+    def resolve_for_distribution(self) -> ClickHouseConnection:
+        """Snapshot an environment credential before Ray serializes the plan."""
+        if self.password_env is None:
+            return self
+        return replace(
+            self,
+            password=self.resolve_password(),
+            password_env=None,
+        )
 
     def client_kwargs(self, limits: ResourceLimits) -> dict[str, Any]:
         kwargs: dict[str, Any] = {

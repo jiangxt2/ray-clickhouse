@@ -47,7 +47,7 @@ def _connection(
         secure=secure,
         settings=settings,
         client_options=client_options,
-    )
+    ).resolve_for_distribution()
 
 
 def read_clickhouse(
