@@ -12,6 +12,7 @@ from ray.data.datasource import Datasource, ReadTask
 
 from ray_clickhouse._compat import ensure_supported_ray_version, make_read_task
 from ray_clickhouse._discovery import (
+    LOCAL_MERGETREE_ENGINES,
     DiscoverySnapshot,
     PartitionInfo,
     RangeFacts,
@@ -19,6 +20,8 @@ from ray_clickhouse._discovery import (
     discover_partitions,
     discover_range_facts,
     discover_schema,
+    discover_sorting_key,
+    select_auto_range_column,
 )
 from ray_clickhouse._errors import ConfigurationError, DiscoveryError, PermissionError
 from ray_clickhouse._models import (
@@ -61,12 +64,16 @@ class ClickHouseReadConfig:
     diagnostic_flush_logs: bool = False
 
     def __post_init__(self) -> None:
-        if self.split not in {"single", "partition", "range"}:
-            raise ConfigurationError("split must be 'single', 'partition', or 'range'")
+        if self.split not in {"single", "partition", "range", "auto"}:
+            raise ConfigurationError(
+                "split must be 'single', 'partition', 'range', or 'auto'"
+            )
         if self.discovery_policy not in {"single", "error"}:
             raise ConfigurationError("discovery_policy must be 'single' or 'error'")
         if self.split == "range" and self.range_column is None:
             raise ConfigurationError("split='range' requires range_column")
+        if self.split == "auto" and self.range_column is not None:
+            raise ConfigurationError("split='auto' does not accept range_column")
         if self.order_by is not None and self.split != "single":
             raise ConfigurationError("order_by requires split='single'")
         if self.range_column is not None:
@@ -121,7 +128,7 @@ class ClickHouseDatasource(Datasource):
         schema = discover_schema(config.connection, config.table, config.limits)
         engine = discover_engine(config.connection, config.table, config.limits)
         if not _is_mergetree_engine(engine) and not (
-            config.split == "single" and engine in _SINGLE_QUERY_ENGINES
+            config.split in {"single", "auto"} and engine in _SINGLE_QUERY_ENGINES
         ):
             raise DiscoveryError(
                 f"ClickHouse engine {engine!r} is unsupported for "
@@ -161,6 +168,27 @@ class ClickHouseDatasource(Datasource):
                 )
             except PermissionError:
                 raise
+            except DiscoveryError:
+                if config.discovery_policy == "error":
+                    raise
+        if config.split == "auto":
+            try:
+                if engine not in LOCAL_MERGETREE_ENGINES:
+                    raise DiscoveryError(
+                        "automatic range splitting requires a direct MergeTree table"
+                    )
+                sorting_key = discover_sorting_key(
+                    config.connection, config.table, config.limits
+                )
+                range_definition = select_auto_range_column(sorting_key, schema.columns)
+                range_facts = discover_range_facts(
+                    config.connection,
+                    config.table,
+                    config.limits,
+                    column=range_definition,
+                    filter_sql=config.filter_sql,
+                    parameters=dict(config.query_parameters),
+                )
             except DiscoveryError:
                 if config.discovery_policy == "error":
                     raise
@@ -212,8 +240,9 @@ class ClickHouseDatasource(Datasource):
             filter_sql=config.filter_sql,
             parameters=dict(config.query_parameters),
             partition_ids=partition_ids,
-            range_column=config.range_column
-            if range_lower is not None or range_upper is not None
+            range_column=snapshot.range_facts.column
+            if snapshot.range_facts is not None
+            and (range_lower is not None or range_upper is not None)
             else None,
             range_lower=range_lower,
             range_upper=range_upper,
@@ -281,7 +310,7 @@ class ClickHouseDatasource(Datasource):
                 self._make_task(columns=columns, per_task_row_limit=per_task_row_limit)
             ]
 
-        if self._config.split == "range" and snapshot.range_facts is not None:
+        if self._config.split in {"range", "auto"} and snapshot.range_facts is not None:
             ranges = plan_integer_ranges(
                 snapshot.range_facts,
                 target_tasks=task_count,

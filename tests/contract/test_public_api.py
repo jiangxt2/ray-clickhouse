@@ -129,3 +129,27 @@ def test_internal_components_follow_arrow_and_ray_contracts() -> None:
     assert issubclass(ClickHouseDatasource, ray.data.datasource.Datasource)
     assert issubclass(ClickHouseDataSink, ray.data.datasource.Datasink)
     assert pa.schema([("id", pa.uint64())]).names == ["id"]
+
+
+def test_auto_split_is_explicit_and_preserves_ray_resource_passthrough() -> None:
+    assert inspect.signature(read_clickhouse).parameters["split"].default == "single"
+    with patch(
+        "ray_clickhouse._api.ray.data.read_datasource", return_value="dataset"
+    ) as read:
+        result = read_clickhouse(
+            host="clickhouse",
+            database="analytics",
+            table="events",
+            split="auto",
+            target_tasks=3,
+            discovery_policy="error",
+            concurrency=2,
+            memory=1024,
+        )
+    assert result == "dataset"
+    source = read.call_args.args[0]
+    assert source.config.split == "auto"
+    assert source.config.range_column is None
+    assert source.config.target_tasks == 3
+    assert source.config.discovery_policy == "error"
+    assert read.call_args.kwargs == {"concurrency": 2, "memory": 1024}

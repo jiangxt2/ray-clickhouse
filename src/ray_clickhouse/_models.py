@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 from ray_clickhouse._errors import ConfigurationError
 
-SplitMode = Literal["single", "partition", "range"]
+SplitMode = Literal["single", "partition", "range", "auto"]
 DiscoveryPolicy = Literal["single", "error"]
 InsertMode = Literal["sync", "async"]
 WriteMode = Literal["append", "create", "overwrite"]

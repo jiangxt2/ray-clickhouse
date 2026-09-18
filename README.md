@@ -20,6 +20,29 @@ The first release does not provide arbitrary SQL execution, arbitrary DDL, delet
 connector-side Distributed shard routing, cross-task transactions, or exactly-once guarantees.
 Distributed reads use one ClickHouse query; ClickHouse owns shard routing.
 
+Automatic range planning is opt-in. For a direct MergeTree-family table with a
+simple sorting key starting with an integer column, use `split="auto"` to select
+that column without supplying `range_column`:
+
+```python
+from ray_clickhouse import read_clickhouse
+
+dataset = read_clickhouse(
+    host="clickhouse.example",
+    database="analytics",
+    table="events",
+    split="auto",
+    target_tasks=4,
+)
+```
+
+The default remains `split="single"`. Automatic planning reuses the existing
+filtered range aggregate and disjoint range planner, not ordered pagination.
+Unsuitable sorting keys fall back to one query; use `discovery_policy="error"`
+to require an eligible range plan. Authentication, permission, and transport
+failures still raise. See [Architecture](doc/source/architecture.md) for supported
+keys and consistency limits.
+
 The read API follows the Ray Data `Datasource`/`ReadTask` contract. The write API uses
 `Dataset.write_datasink()` and does not monkey-patch Ray Dataset methods.
 The package-root public API consists of `read_clickhouse()`, `write_clickhouse()`,

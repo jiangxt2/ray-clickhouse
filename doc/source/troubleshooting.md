@@ -20,6 +20,15 @@ Do not automatically retry `AmbiguousWriteError`. Query ClickHouse using applica
 
 Partition and integer-range splits require a validated direct MergeTree-family table. Views, MaterializedView, and Distributed tables cannot use those split modes. Use `split="single"` for supported View and Distributed reads.
 
+If `split="auto"` produces one task, the table may have an ineligible sorting
+key, a constant or empty range, or be a supported single-query engine. Automatic
+selection uses only the first column of a simple sorting-key list; it does not
+interpret expressions or choose a later integer column. Set
+`discovery_policy="error"` to surface eligibility or discovery errors, or use
+`split="range", range_column="..."` to explicitly select a supported integer
+column. Even a valid range plan may have one task when the data or task budget
+does not allow further splitting.
+
 ## Arrow stream failures and query diagnostics
 
 An Arrow read failure can be reported as `ArrowInvalid`, `IncompleteRead`, or a transport error when ClickHouse fails after an Arrow response has started. Read failures carry the generated query id when available and perform a bounded, best-effort lookup in `system.query_log`. Set `diagnostic_flush_logs=True` on `read_clickhouse()` when the account is allowed to run `SYSTEM FLUSH LOGS` and immediate query-log visibility is required. The diagnostic lookup never replaces the original read exception and may be unavailable when query logging is delayed or permission is missing.
