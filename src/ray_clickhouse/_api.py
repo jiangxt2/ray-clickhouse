@@ -83,7 +83,15 @@ def read_clickhouse(
     num_gpus: float | None = None,
     memory: float | None = None,
 ) -> ray.data.Dataset:
-    """Read a structured ClickHouse physical table into a Ray Dataset."""
+    """Read a structured ClickHouse physical table into a Ray Dataset.
+
+    ``split="auto"`` opts into integer-range planning on a direct MergeTree table
+    whose simple sorting key starts with an integer column. Unsupported sorting
+    keys and supported single-query engines fall back to one query unless
+    ``discovery_policy="error"``. Authentication, permission and transport errors
+    are not fallback conditions. Explicit ``range_column`` and ``order_by`` are
+    incompatible with automatic splitting. The default remains ``split="single"``.
+    """
     ensure_supported_ray_version()
     config = ClickHouseReadConfig(
         connection=_connection(

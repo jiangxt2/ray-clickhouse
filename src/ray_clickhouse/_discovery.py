@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -66,6 +67,48 @@ WRITE_ENGINES = frozenset(
         "ReplicatedGraphiteMergeTree",
     }
 )
+
+_SORTING_IDENTIFIER = r"(?:[A-Za-z_][A-Za-z0-9_]*|`[A-Za-z_][A-Za-z0-9_]*`)"
+_SORTING_COLUMNS = re.compile(
+    rf"{_SORTING_IDENTIFIER}(?:\s*,\s*{_SORTING_IDENTIFIER})*"
+)
+
+
+def _is_integer_range_column(column: TargetColumn) -> bool:
+    parsed = parse_type(column.declared_type)
+    while parsed.name in {"Nullable", "LowCardinality"}:
+        parsed = parse_type(parsed.arguments[0])
+    return parsed.name in {
+        "Int8",
+        "Int16",
+        "Int32",
+        "Int64",
+        "UInt8",
+        "UInt16",
+        "UInt32",
+        "UInt64",
+    }
+
+
+def select_auto_range_column(
+    sorting_key: str, columns: tuple[TargetColumn, ...]
+) -> TargetColumn:
+    """Accept only a simple sorting-key list with a physical integer first column."""
+    key = sorting_key.strip()
+    if key.startswith("tuple(") and key.endswith(")"):
+        key = key[6:-1].strip()
+    if not _SORTING_COLUMNS.fullmatch(key):
+        raise DiscoveryError("automatic range splitting requires a simple sorting key")
+    names = tuple(part.strip().strip("`") for part in key.split(","))
+    by_name = {column.name: column for column in columns}
+    if any(name not in by_name for name in names):
+        raise DiscoveryError("sorting key contains a column absent from the schema")
+    column = by_name[names[0]]
+    if column.default_kind == "ALIAS" or not _is_integer_range_column(column):
+        raise DiscoveryError(
+            "automatic range splitting requires a physical integer first sorting column"
+        )
+    return column
 
 
 @dataclass(frozen=True)
@@ -225,6 +268,46 @@ def discover_engine(
                 pass
 
 
+def discover_sorting_key(
+    connection: ClickHouseConnection, table: QualifiedTable, limits: ResourceLimits
+) -> str:
+    """Read sorting metadata without interpreting expressions or following engines."""
+    client = None
+    try:
+        client = _open(connection, limits)
+        settings, transport_settings = _query_context(
+            connection, limits, "sorting-key-discovery"
+        )
+        result = client.query(
+            "SELECT sorting_key FROM system.tables "
+            "WHERE database = %(database)s AND name = %(table)s",
+            parameters={"database": table.database, "table": table.table},
+            settings=settings,
+            transport_settings=transport_settings,
+        )
+        if not result.result_rows:
+            raise ObjectNotFoundError(f"ClickHouse table {table} was not found")
+        if (
+            len(result.result_rows) != 1
+            or len(result.result_rows[0]) != 1
+            or not isinstance(result.result_rows[0][0], str)
+        ):
+            raise DiscoveryError("system.tables returned malformed sorting metadata")
+        return result.result_rows[0][0]
+    except RayClickHouseError:
+        raise
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
+            raise
+        raise _translate(exc, operation="sorting-key discovery") from None
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+
 def discover_partitions(
     connection: ClickHouseConnection, table: QualifiedTable, limits: ResourceLimits
 ) -> tuple[PartitionInfo, ...]:
@@ -297,19 +380,7 @@ def discover_range_facts(
     filter_sql: str | None,
     parameters: Mapping[str, Any] | None,
 ) -> RangeFacts:
-    parsed = parse_type(column.declared_type)
-    while parsed.name in {"Nullable", "LowCardinality"}:
-        parsed = parse_type(parsed.arguments[0])
-    if parsed.name not in {
-        "Int8",
-        "Int16",
-        "Int32",
-        "Int64",
-        "UInt8",
-        "UInt16",
-        "UInt32",
-        "UInt64",
-    }:
+    if not _is_integer_range_column(column):
         raise DiscoveryError("range split currently supports integer columns only")
     client = None
     try:
