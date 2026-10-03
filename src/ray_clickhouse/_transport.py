@@ -292,6 +292,18 @@ def stream_query(
                     batch = pa.Table.from_batches([batch])
                 if not isinstance(batch, pa.Table):
                     raise ReadError("ClickHouse yielded a non-Arrow table")
+                if query.strict_schema:
+                    if not batch.schema.equals(
+                        query.arrow_schema, check_metadata=False
+                    ):
+                        raise ReadError("query result schema changed since planning")
+                    if any(
+                        not field.nullable and batch[field.name].null_count
+                        for field in query.arrow_schema
+                    ):
+                        raise ReadError(
+                            "query result contains NULL in a non-nullable field"
+                        )
                 canonical = _validate_table(batch, query.arrow_schema)
                 yield from iter_batch_slices(
                     canonical,

@@ -29,6 +29,16 @@ interpret expressions or choose a later integer column. Set
 column. Even a valid range plan may have one task when the data or task budget
 does not allow further splitting.
 
+## Query result reads
+
+Specify exactly one source: table or query. Query mode uses a single task and
+does not accept table filter, projection, ordering or physical split options.
+Use explicit simple aliases for computed or duplicate result columns. Unsupported
+result declarations and Arrow schema drift fail closed. Parameters currently use
+the client-side named form; quoted/commented placeholder-looking text with
+active bindings is rejected. Metadata discovery adds two requests and is not a
+snapshot or a guarantee of zero scan work.
+
 ## Arrow stream failures and query diagnostics
 
 An Arrow read failure can be reported as `ArrowInvalid`, `IncompleteRead`, or a transport error when ClickHouse fails after an Arrow response has started. Read failures carry the generated query id when available and perform a bounded, best-effort lookup in `system.query_log`. Set `diagnostic_flush_logs=True` on `read_clickhouse()` when the account is allowed to run `SYSTEM FLUSH LOGS` and immediate query-log visibility is required. The diagnostic lookup never replaces the original read exception and may be unavailable when query logging is delayed or permission is missing.

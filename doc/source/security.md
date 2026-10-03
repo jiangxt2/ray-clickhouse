@@ -10,6 +10,12 @@ Resolved credentials must not appear in logs, exception messages, repr output, r
 
 Database, table, column, range, and ordering identifiers must be simple validated identifiers and are quoted by connector helpers. `filter` accepts a trusted SQL scalar predicate, not an arbitrary query. Values belong in `query_parameters`.
 
+Query mode accepts trusted SELECT/WITH text with named value bindings and simple
+result aliases. It uses a limited lexical grammar gate and enforces readonly=1;
+it is not an untrusted SQL sandbox. Database privileges remain authoritative.
+The API rejects inline settings, output formats/files, multiple statements and
+DDL/DML. Query text and values are omitted from configuration repr output.
+
 ## Side effects
 
 Writes disable Ray task retries and exception retries. A response timeout or disconnect can leave an INSERT outcome ambiguous. Generated overwrite validates inputs before destructive operations and reports table-management ambiguity when replacement status is unknown.

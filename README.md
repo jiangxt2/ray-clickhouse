@@ -60,6 +60,33 @@ classes are internal and are not independent compatibility promises.
 - [Security policy](SECURITY.md)
 - [Release notes](release-notes/v0.1.0.md)
 
+## Query result reads
+
+The development API also accepts a trusted query source. Query reads require
+exactly one of `table` or `query`, use one data-read task, and infer the
+result schema with DESCRIBE and a zero-row Arrow probe.
+
+```python
+dataset = read_clickhouse(
+    host="clickhouse.example",
+    database="analytics",
+    query=(
+        "SELECT tenant_id, count() AS event_count FROM events "
+        "WHERE tenant_id = %(tenant)s GROUP BY tenant_id"
+    ),
+    query_parameters={"tenant": 42},
+)
+```
+
+Query mode supports the documented SELECT/WITH subset, client-side named value
+bindings, and unique simple result aliases. Table projection, filter, ordering,
+range columns, and split modes are supplied in the SQL rather than connector
+options. The connector enforces `readonly=1` and rejects multiple statements,
+DDL/DML, output formats, output files, and inline settings. Metadata probes and
+the data read are independent requests and do not share a database snapshot.
+A zero-row probe can still incur server work. `override_num_blocks` changes
+Ray output blocks and does not multiply the query.
+
 ## Usage
 
 ```python
@@ -114,7 +141,7 @@ server-provided and may include query context, so do not put credentials in quer
 predicates or parameters.
 
 `filter` is a trusted predicate fragment, not an arbitrary SQL query. Values must be passed through
-`query_parameters`; the connector does not execute arbitrary SQL or provide delete, update,
+`query_parameters`; the connector rejects unrestricted statement execution and does not provide delete, update,
 upsert, connector-side Distributed shard routing, or exactly-once semantics. `write_mode="overwrite"`
 is destructive and must be selected explicitly. For create/overwrite, nullable columns must be
 listed explicitly through `nullable_columns`; timestamp precision is preserved and unsupported

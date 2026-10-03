@@ -104,7 +104,7 @@ def _parameter_map(parameters: Mapping[str, Any] | None) -> dict[str, Any]:
     return values
 
 
-def _validate_filter_parameters(
+def validate_filter_parameters(
     filter_sql: str | None, parameters: dict[str, Any]
 ) -> None:
     if filter_sql is None:
@@ -166,7 +166,7 @@ def build_select(
 ) -> tuple[str, tuple[tuple[str, Any], ...]]:
     filter_sql = validate_filter(filter_sql)
     values = _parameter_map(parameters)
-    _validate_filter_parameters(filter_sql, values)
+    validate_filter_parameters(filter_sql, values)
     clauses: list[str] = []
     if filter_sql is not None:
         clauses.append(f"({filter_sql})")

@@ -61,5 +61,9 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
     "${compose[@]}" up --detach --wait --no-build
 
 set -o pipefail
-"$python_bin" -m pytest tests/integration -m integration -vv \
+pytest_targets=("$@")
+if [[ "$#" -eq 0 ]]; then
+    pytest_targets=(tests/integration)
+fi
+"$python_bin" -m pytest "${pytest_targets[@]}" -m integration -vv \
     --junitxml="$artifact_dir/pytest.xml" 2>&1 | tee "$artifact_dir/pytest.log"

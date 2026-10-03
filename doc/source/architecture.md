@@ -46,6 +46,21 @@ skewed work. Range discovery and task queries do not share a snapshot; concurren
 inserts, deletes, or key updates can change coverage. Use stable source data when
 exact coverage is required. No process memory or exactly-once guarantee is added.
 
+### Query result source
+
+A query source uses the same public Ray Datasource/ReadTask contract and bounded
+Arrow transport. The driver aligns DESCRIBE result declarations with a zero-row
+Arrow probe, caches only schema facts, and builds one read task. Workers execute
+a generated projection over the trusted query to preserve supported Date, UUID,
+Enum and nested logical values. Physical engine and split discovery are bypassed.
+Query mode compares the worker Arrow schema with the planned schema before any
+cast. Changes to Arrow field types, decimal precision/scale, timestamp units or
+timezones, and nullability fail closed. Declaration changes that produce the
+same Arrow schema, such as DateTime64(4) to DateTime64(5), are not distinguished
+by this check. Metadata and execution are separate database requests, with no
+shared snapshot or promise of zero server work during planning. Ray block controls
+do not shard the query.
+
 ## Write path
 
 Writes use `Dataset.write_datasink()` and do not monkey-patch Ray Dataset. Append to an existing supported MergeTree-family table is the default. Generated `create` and `overwrite` modes are explicit and restricted.
@@ -54,4 +69,4 @@ Ray task retries are forced to zero through the public facade. Transport failure
 
 ## Non-goals
 
-The connector does not provide arbitrary SQL, arbitrary DDL, delete, update, upsert, cross-task transactions, snapshot isolation, exactly-once writes, or connector-side Distributed shard routing.
+The connector does not provide unrestricted statement execution, arbitrary DDL, delete, update, upsert, cross-task transactions, snapshot isolation, exactly-once writes, or connector-side Distributed shard routing.

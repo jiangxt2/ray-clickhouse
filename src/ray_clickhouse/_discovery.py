@@ -11,6 +11,7 @@ import pyarrow as pa
 
 from ray_clickhouse._errors import (
     AuthenticationError,
+    ConfigurationError,
     DiscoveryError,
     ObjectNotFoundError,
     PermissionError,
@@ -18,11 +19,18 @@ from ray_clickhouse._errors import (
     SchemaError,
     TransportError,
 )
-from ray_clickhouse._models import ClickHouseConnection, QualifiedTable, ResourceLimits
+from ray_clickhouse._models import (
+    ClickHouseConnection,
+    QualifiedTable,
+    ResourceLimits,
+    validate_identifier,
+)
 from ray_clickhouse._schema import (
     SchemaPlan,
     TargetColumn,
     TargetTable,
+    _unwrap,
+    arrow_compatible,
     canonical_schema,
     parse_describe_rows,
     parse_type,
@@ -189,6 +197,75 @@ def _query_context(
     settings = connection.query_settings(limits)
     settings.setdefault("log_comment", f"ray-clickhouse operation={operation}")
     return settings, {"query_id": _new_query_id(operation)}
+
+
+def discover_query_schema(
+    connection: ClickHouseConnection,
+    query_sql: str,
+    limits: ResourceLimits,
+    *,
+    parameters: Mapping[str, Any],
+) -> SchemaPlan:
+    """Align query-result declarations with a zero-row Arrow probe."""
+    client = None
+    failed = False
+    try:
+        client = _open(connection, limits)
+        settings = connection.query_settings(limits)
+        settings["readonly"] = 1
+        settings["query_id"] = _new_query_id("query-describe")
+        described = client.query(
+            f"DESCRIBE (\n{query_sql}\n)",
+            parameters=dict(parameters),
+            settings=settings,
+        )
+        columns = parse_describe_rows(described.result_rows)
+        try:
+            for column in columns:
+                validate_identifier(column.name, name="query result alias")
+        except ConfigurationError:
+            raise SchemaError(
+                "query results require unique simple column aliases"
+            ) from None
+        projection = render_read_projection(columns)
+        settings["query_id"] = _new_query_id("query-schema-probe")
+        probe = client.query_arrow(
+            f"SELECT {projection} FROM (\n{query_sql}\n) "
+            "AS __ray_clickhouse_query LIMIT 0",
+            parameters=dict(parameters),
+            settings=settings,
+            use_strings=True,
+        )
+        if not isinstance(probe, pa.Table):
+            raise SchemaError("ClickHouse returned a non-Arrow query schema probe")
+        plan = canonical_schema(columns, probe.schema)
+        for column, arrow_field in zip(columns, probe.schema, strict=True):
+            _, nullable = _unwrap(parse_type(column.declared_type))
+            if (
+                not arrow_compatible(arrow_field.type, column.declared_type)
+                or arrow_field.nullable != nullable
+            ):
+                raise SchemaError(
+                    "query declaration and Arrow types or nullability disagree"
+                )
+        return plan
+    except RayClickHouseError:
+        failed = True
+        raise
+    except BaseException as exc:
+        failed = True
+        if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
+            raise
+        raise _translate(exc, operation="schema discovery") from None
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                if not failed:
+                    raise TransportError(
+                        "failed to close query discovery client"
+                    ) from None
 
 
 def discover_schema(

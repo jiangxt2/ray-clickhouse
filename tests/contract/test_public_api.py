@@ -54,19 +54,16 @@ def test_read_facade_builds_a_ray_datasource_and_snapshots_inputs() -> None:
     assert read.call_args.kwargs["ray_remote_args"] == {"num_cpus": 0.5}
 
 
-def test_public_read_api_does_not_accept_arbitrary_sql() -> None:
+def test_public_read_api_rejects_unrestricted_statement_execution() -> None:
     signature = inspect.signature(read_clickhouse)
-    assert "query" not in signature.parameters
+    assert "query" in signature.parameters
     assert "table" in signature.parameters
     assert "order_by" in signature.parameters
     assert "num_cpus" in signature.parameters
     assert "memory" in signature.parameters
-    with pytest.raises(TypeError):
+    with pytest.raises(ray_clickhouse.ConfigurationError):
         read_clickhouse(
-            host="clickhouse",
-            database="analytics",
-            table="events",
-            query="SELECT count() FROM events",
+            host="clickhouse", database="analytics", query="DROP TABLE events"
         )
 
 
