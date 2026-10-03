@@ -71,7 +71,7 @@ The GitHub build-provenance attestation verified above is distinct from the publ
 - Use only supported Ray public extension contracts; do not import `ray.data._internal`.
 - Keep Ray-version adaptation in `_compat.py`.
 - Preserve fail-closed schema, credential, retry, and ambiguous-result behavior.
-- Do not add arbitrary SQL, arbitrary DDL, upsert, transaction, snapshot-isolation, or exactly-once claims.
+- Keep query reads within the documented trusted SELECT/WITH profile; do not add arbitrary DDL, upsert, transaction, snapshot-isolation, or exactly-once claims.
 - Do not add type-checking suppression comments.
 - Keep each change limited to its approved capability and include direct success, failure, and cleanup tests.
 

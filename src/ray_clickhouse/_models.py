@@ -250,6 +250,7 @@ class QuerySpec:
     parameters: tuple[tuple[str, Any], ...]
     arrow_schema: Any
     operation: str = "read"
+    strict_schema: bool = False
 
     def parameter_dict(self) -> dict[str, Any]:
         return dict(self.parameters)

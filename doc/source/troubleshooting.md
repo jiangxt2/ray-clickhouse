@@ -29,6 +29,16 @@ interpret expressions or choose a later integer column. Set
 column. Even a valid range plan may have one task when the data or task budget
 does not allow further splitting.
 
+## Query result reads
+
+Specify exactly one source: table or query. Query mode uses a single task and
+does not accept table filter, projection, ordering or physical split options.
+Use explicit simple aliases for computed or duplicate result columns. Unsupported
+result declarations and Arrow schema drift fail closed. Parameters currently use
+the client-side named form; quoted/commented placeholder-looking text with
+active bindings is rejected. Metadata discovery adds two requests and is not a
+snapshot or a guarantee of zero scan work.
+
 ## Arrow stream failures and query diagnostics
 
 Inspect `error.client_diagnostic` for the underlying exception type, operation,

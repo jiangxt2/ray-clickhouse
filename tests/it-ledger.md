@@ -102,3 +102,28 @@
 | --- | --- | --- | --- | --- |
 | Local static and unit/contract checks | Ruff format/lint, mypy, compatibility, documentation, release checks, and the complete unit/contract suite | Feature combined with master `e6d2f399587580d139a43654af254e981ea8c17e`; runtime fingerprint `8d02f0d4e81943aab650955a6690126ed5a5ee427ad121d75fe19fb365eca407` | User-approved resolution of the shared ledger conflict; production delta against master matches the original feature | Passed: 335 unit/contract cases, no skips; all static checks passed; evidence `.artifacts/conflict-resolution/master-e6d2f3995875-20261003T152113Z/validation.json` |
 | CI ClickHouse and Ray multi-node integration | Combined feature and read-diagnostic cases | Same combined runtime state, pending commit and push | The prior separate-branch IT results remain historical evidence; CI will validate this new combination | Pending authorized commit/push; not executed for this combined state |
+
+## Trusted query results
+
+### Initial full suites
+
+| Suite | Scope | Code/config state | Reason | Result |
+| --- | --- | --- | --- | --- |
+| clickhouse diagnostic (ray-clickhouse-read-query-results) | Targeted new-implementation checkpoint: tests/integration/test_query_metadata.py | Content SHA256 2ab30278cf9bfda7a198f3eaafcc594ba37a7eb694ad442886421502a195a1a0; Python 3.12 / Ray 2.58 / ClickHouse 26.8 | Authorized diagnostic run; distinct branch and infrastructure baseline | Passed (exit 0); evidence `.artifacts/implementation/clickhouse-diagnostic-2ab30278cf9b` |
+| clickhouse final (ray-clickhouse-read-query-results) | Complete existing and new integration cases | Content SHA256 c50f06a1544ee3cfa054663748f748333d4056d2fdedb2f52b84843e23a3f7fe; Python 3.12 / Ray 2.58 / ClickHouse 26.8 | Authorized final run; distinct branch and infrastructure baseline | Failed (exit 1); evidence `.artifacts/implementation/clickhouse-final-c50f06a1544e` |
+| ray-cluster final (ray-clickhouse-read-query-results) | Complete existing and new integration cases | Content SHA256 ff001326207b123db31a1cb47d6a5f49c618bc3ad5c4ea4be1278a41d6aa0b5e; Python 3.12 / Ray 2.58 / ClickHouse 26.8 | Authorized final run; distinct branch and infrastructure baseline | Passed (exit 0); evidence `.artifacts/implementation/ray-cluster-final-ff001326207b` |
+| clickhouse final (ray-clickhouse-read-query-results) | Complete existing and new integration cases | Content SHA256 ff001326207b123db31a1cb47d6a5f49c618bc3ad5c4ea4be1278a41d6aa0b5e; Python 3.12 / Ray 2.58 / ClickHouse 26.8 | User explicitly approved rerun after incorrect zero-scan assertion; test now verifies zero output and records scan work; previous failed full result cannot be reused | Passed (exit 0); evidence `.artifacts/implementation/clickhouse-final-ff001326207b` |
+
+### Master synchronization validation
+
+| Suite | Scope | Code/config state | Reason | Result |
+| --- | --- | --- | --- | --- |
+| Local static and unit/contract checks | Ruff format/lint, mypy, compatibility, documentation, release checks, and the complete unit/contract suite | Feature combined with master `e6d2f399587580d139a43654af254e981ea8c17e`; runtime fingerprint `70e56dbfa7d9a1e516481feb63fd0a34c3938d72f22f76a836446b5821395024` | User-approved resolution of the shared ledger conflict; production delta against master matches the original feature | Passed: 316 unit/contract cases, no skips; all static checks passed; evidence `.artifacts/conflict-resolution/master-e6d2f3995875-20261003T152113Z/validation.json` |
+| CI ClickHouse and Ray multi-node integration | Combined feature and read-diagnostic cases | Same combined runtime state, pending commit and push | The prior separate-branch IT results remain historical evidence; CI will validate this new combination | Pending authorized commit/push; not executed for this combined state |
+
+### Typed parameter integration validation
+
+| Suite | Scope | Code/config state | Reason | Result |
+| --- | --- | --- | --- | --- |
+| Focused binding and query contract checks | tests/unit/test_query.py, tests/unit/test_typed_parameters.py, tests/contract/test_public_api.py; Ruff, mypy and documentation checks | Query feature combined with master `2525e9134a95811b85f1666707d242d6843f6eaa`; runtime fingerprint `59affb8efc22623319a973cd7fa84e6b2bf4d237427a44bf5995182e4100c352` | Query mode now calls the merged typed-parameter validator; run only the directly affected checks | Passed: 106 cases, no skips; all static checks passed; evidence `.artifacts/conflict-resolution/master-2525e9134a95-20261003T155426Z/validation.json` |
+| Prior CI integration evidence | Read diagnostics plus typed parameters, and read diagnostics plus query reads | [Typed-parameter CI](https://github.com/jiangxt2/ray-clickhouse/actions/runs/37133808308) and [Query CI](https://github.com/jiangxt2/ray-clickhouse/actions/runs/37133854786) | Preserve successful separate-combination evidence; no local full suites or infrastructure tests rerun | Historical: typed combination ClickHouse 69 passed plus one cluster-only skip, Ray cluster 70 passed; query combination ClickHouse 44 passed plus one cluster-only skip, Ray cluster 45 passed. These runs do not claim complete three-feature integration coverage |
