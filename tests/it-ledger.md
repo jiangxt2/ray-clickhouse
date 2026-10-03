@@ -42,10 +42,54 @@
 | Official comparison summary/sanitizer gate | Recompute summary and complete sanitizer from `smoke-20260902t082640z-95267` using telemetry-gated pairing, recursive JSON/JSONL allowlists, and symlink/binary policy | Current `summary.py`, `evidence.py`, and CLI changes; no Docker or Ray execution | Short post-change evidence integrity validation; no overlap with infrastructure smoke; raw `summary.json` remains immutable and is not overwritten; derived output is `.artifacts/comparison/derived/smoke-20260902t082640z-95267/summary.json` | Passed: all incomplete smoke rows have zero paired resource metrics and no resource/timing fields, including `query_duration_ms`, in their derived numeric summaries; complete sanitizer accepted the artifact; symlink and complete-binary rejection tests passed; 2026-09-02 |
 | Official comparison ray-doris lifecycle smoke | Four approved smoke cases after switching to one shared cluster per runtime side, clean resource-side boundaries, side-specific Ray environments, and explicit worker-loss markers | Runner `eb0e599c4a12c8d796f10760bfc9c749d38fb574`; Compose `dcd78561de1a4913c688fbb6aa634416673464e2`; runner implementation `4059be597ab1456d790aa097f0b99802b3130338`; evidence `3ea52e679d041d49adc91bfd5ae0e55a54f74ae0`; scenario digest `0c67ad12e32f9d67115dd73af409d975c49fae34023b31a8ba6c98e4cebdca2f` | One necessary final real-infrastructure smoke after lifecycle and runtime-isolation changes; no overlap with prior per-case or mixed-runtime failures | Passed: run `smoke-20260903t042606z-93874`; 4/4 results valid, external response-loss and official worker-loss boundaries proven, worker-loss recorded two Write attempts and four inserted rows, complete sanitizer replay passed, each side's Compose project and runtime image removed, dangling-image baseline unchanged; 2026-09-03 |
 
+## Read diagnostics
+
+### Initial full suites
+
+| Suite | Scope | Code/config state | Reason | Result |
+| --- | --- | --- | --- | --- |
+| clickhouse final (ray-clickhouse-read-error-causes) | Complete existing and new integration cases | Content SHA256 b6018e51bb87d1305e8c6f694ce7836279be1d0b60393664081bf79ece856180; Python 3.12 / Ray 2.58 / ClickHouse 26.8 | Authorized final run; distinct branch and infrastructure baseline | Passed (exit 0); evidence `.artifacts/implementation/clickhouse-final-b6018e51bb87` |
+| ray-cluster final (ray-clickhouse-read-error-causes) | Complete existing and new integration cases | Content SHA256 b6018e51bb87d1305e8c6f694ce7836279be1d0b60393664081bf79ece856180; Python 3.12 / Ray 2.58 / ClickHouse 26.8 | Authorized final run; distinct branch and infrastructure baseline | Passed (exit 0); evidence `.artifacts/implementation/ray-cluster-final-b6018e51bb87` |
+
+### Review correction validation
+
+| Suite | Scope | Code/config state | Reason | Result |
+| --- | --- | --- | --- | --- |
+| Complete ClickHouse IT after diagnostic corrections | All 29 collected integration cases, including the new public worker-token failure | Runtime fingerprint `a1835f330a8c92e6f90125867e45485b32c255472df1fb83d6bf0465193b8fc2`; detailed files in `.artifacts/review-fixes/summary.json` | Prior 27 passed plus one cluster-only skip cover the previous implementation; redaction and worker-token IT changed | Pending explicit rerun approval; not executed |
+| Complete Ray-cluster IT after diagnostic corrections | All 29 cases on the existing three-node Ray 2.58 baseline; worker-resolved token and serialized errors | Same runtime fingerprint | Prior 28 passed cover the previous implementation; new distributed credential-failure evidence is needed | Pending explicit rerun approval; not executed |
+| Approved review rerun: clickhouse | Complete suite, 29 collected cases | Runtime fingerprint `a1835f330a8c92e6f90125867e45485b32c255472df1fb83d6bf0465193b8fc2` | User explicitly approved the planned final rerun; prior runtime evidence covers the previous implementation | failed; exit=1; counts={"total": 29, "passed": 27, "failed_or_error": 1, "skipped": 1}; `.artifacts/review-fixes/clickhouse-a1835f330a8c` |
+| Approved review rerun: ray-cluster | Complete suite, 29 collected cases | Runtime fingerprint `3d47da43cbd029939d1155cdf358ff4fd9a537121bf3424a790b6ee03ee1c70b` | User explicitly approved the planned final rerun; prior runtime evidence covers the previous implementation | passed; exit=0; counts={"total": 29, "passed": 29, "failed_or_error": 0, "skipped": 0}; `.artifacts/review-fixes/ray-cluster-3d47da43cbd0` |
+
+### Fixture correction and current evidence
+
+- The failed ClickHouse run was caused by the test combining token_provider with the connector-managed username/password. The SDK factory rejects this combination; the prior claimed public route is withdrawn.
+- The fixture now exercises a supported additional header through the real SDK/read transport in a Ray worker. Production/authentication behavior was not changed.
+- The first authorized complete Ray-cluster run passed all 29 cases at runtime fingerprint `3d47da43cbd029939d1155cdf358ff4fd9a537121bf3424a790b6ee03ee1c70b`. The extra complete ClickHouse rerun is pending separate approval.
+
+| Suite | Scope | Code/config state | Reason | Result |
+| --- | --- | --- | --- | --- |
+| Approved review rerun: clickhouse | Complete suite, 29 collected cases | Runtime fingerprint `3d47da43cbd029939d1155cdf358ff4fd9a537121bf3424a790b6ee03ee1c70b` | User explicitly approved the planned final rerun; prior runtime evidence covers the previous implementation | passed; exit=0; counts={"total": 29, "passed": 28, "failed_or_error": 0, "skipped": 1}; `.artifacts/review-fixes/clickhouse-3d47da43cbd0` |
+
+### Final review validation
+
+- The separately approved complete ClickHouse rerun passed 28 cases with one expected cluster-only skip. The corrected Ray-cluster suite passed all 29 cases with no skips.
+- Both successful runs use runtime fingerprint `3d47da43cbd029939d1155cdf358ff4fd9a537121bf3424a790b6ee03ee1c70b`. Exact project resources were cleaned; normalized dangling image identities are unchanged.
+- Prior failed evidence is retained. The unsupported public token_provider route claim is withdrawn; production authentication behavior was not expanded.
+
+## Trusted query results
+
+### Initial full suites
+
+| Suite | Scope | Code/config state | Reason | Result |
+| --- | --- | --- | --- | --- |
 | clickhouse diagnostic (ray-clickhouse-read-query-results) | Targeted new-implementation checkpoint: tests/integration/test_query_metadata.py | Content SHA256 2ab30278cf9bfda7a198f3eaafcc594ba37a7eb694ad442886421502a195a1a0; Python 3.12 / Ray 2.58 / ClickHouse 26.8 | Authorized diagnostic run; distinct branch and infrastructure baseline | Passed (exit 0); evidence `.artifacts/implementation/clickhouse-diagnostic-2ab30278cf9b` |
-
 | clickhouse final (ray-clickhouse-read-query-results) | Complete existing and new integration cases | Content SHA256 c50f06a1544ee3cfa054663748f748333d4056d2fdedb2f52b84843e23a3f7fe; Python 3.12 / Ray 2.58 / ClickHouse 26.8 | Authorized final run; distinct branch and infrastructure baseline | Failed (exit 1); evidence `.artifacts/implementation/clickhouse-final-c50f06a1544e` |
-
 | ray-cluster final (ray-clickhouse-read-query-results) | Complete existing and new integration cases | Content SHA256 ff001326207b123db31a1cb47d6a5f49c618bc3ad5c4ea4be1278a41d6aa0b5e; Python 3.12 / Ray 2.58 / ClickHouse 26.8 | Authorized final run; distinct branch and infrastructure baseline | Passed (exit 0); evidence `.artifacts/implementation/ray-cluster-final-ff001326207b` |
-
 | clickhouse final (ray-clickhouse-read-query-results) | Complete existing and new integration cases | Content SHA256 ff001326207b123db31a1cb47d6a5f49c618bc3ad5c4ea4be1278a41d6aa0b5e; Python 3.12 / Ray 2.58 / ClickHouse 26.8 | User explicitly approved rerun after incorrect zero-scan assertion; test now verifies zero output and records scan work; previous failed full result cannot be reused | Passed (exit 0); evidence `.artifacts/implementation/clickhouse-final-ff001326207b` |
+
+### Master synchronization validation
+
+| Suite | Scope | Code/config state | Reason | Result |
+| --- | --- | --- | --- | --- |
+| Local static and unit/contract checks | Ruff format/lint, mypy, compatibility, documentation, release checks, and the complete unit/contract suite | Feature combined with master `e6d2f399587580d139a43654af254e981ea8c17e`; runtime fingerprint `70e56dbfa7d9a1e516481feb63fd0a34c3938d72f22f76a836446b5821395024` | User-approved resolution of the shared ledger conflict; production delta against master matches the original feature | Passed: 316 unit/contract cases, no skips; all static checks passed; evidence `.artifacts/conflict-resolution/master-e6d2f3995875-20261003T152113Z/validation.json` |
+| CI ClickHouse and Ray multi-node integration | Combined feature and read-diagnostic cases | Same combined runtime state, pending commit and push | The prior separate-branch IT results remain historical evidence; CI will validate this new combination | Pending authorized commit/push; not executed for this combined state |

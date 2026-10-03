@@ -6,6 +6,11 @@
 
 Resolved credentials must not appear in logs, exception messages, repr output, release artifacts, benchmark evidence, or public configuration snapshots.
 
+Read client diagnostics omit raw exception chains and SQL-bearing messages.
+They redact worker-local connection strings and parameter string values before
+attaching bounded text to the public error. Query-log details are separate
+server-provided context; avoid putting credentials in predicates or parameters.
+
 ## SQL boundary
 
 Database, table, column, range, and ordering identifiers must be simple validated identifiers and are quoted by connector helpers. `filter` accepts a trusted SQL scalar predicate, not an arbitrary query. Values belong in `query_parameters`.

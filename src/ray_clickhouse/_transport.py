@@ -9,6 +9,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import quote, quote_plus
 
 import pyarrow as pa
 
@@ -64,7 +65,10 @@ def iter_batch_slices(
 
 def _translate(exc: BaseException, *, operation: str) -> RayClickHouseError:
     code = getattr(exc, "code", None)
-    message = str(exc).lower()
+    try:
+        message = str(exc).lower()
+    except Exception:
+        message = ""
     if code in {516, 193} or "authentication" in message:
         return AuthenticationError(
             f"ClickHouse authentication failed during {operation}"
@@ -100,6 +104,67 @@ def _validate_table(table: pa.Table, schema: pa.Schema) -> pa.Table:
         ) from None
 
 
+def _secret_strings(value: object) -> tuple[str, ...]:
+    """Collect worker-local strings without retaining client state in an error."""
+    result: set[str] = set()
+    seen: set[int] = set()
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            if item:
+                result.add(item)
+        elif isinstance(item, (dict, list, tuple)):
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+            pending.extend(item.values() if isinstance(item, dict) else item)
+    return tuple(sorted(result, key=len, reverse=True))
+
+
+def _safe_read_message(message: str, secrets: tuple[str, ...]) -> str:
+    try:
+        # Redact complete auth tokens before short connection strings can split them.
+        message = re.sub(
+            r"\b(Basic|Bearer)\s+[A-Za-z0-9._~+/=-]+",
+            r"\1 <redacted>",
+            message,
+            flags=re.IGNORECASE,
+        )
+        message = re.sub(r"https?://[^\s'\"<>]+", "<redacted-url>", message)
+        for secret in secrets:
+            values = {
+                secret,
+                repr(secret)[1:-1],
+                ascii(secret)[1:-1],
+                repr(secret.encode())[2:-1],
+                quote(secret, safe=""),
+                quote_plus(secret),
+            }
+            for value in sorted(values, key=len, reverse=True):
+                message = message.replace(value, "<redacted>")
+        return message[:1000]
+    except Exception:
+        return "message omitted because sanitization failed"
+
+
+def _client_read_diagnostic(
+    exc: BaseException, operation: str, secrets: tuple[str, ...]
+) -> dict[str, str]:
+    """Report a bounded client failure without exposing a raw exception chain."""
+    try:
+        message = str(exc)
+    except Exception:
+        message = "client message unavailable"
+    if re.search(r"\b(?:SELECT|INSERT|ALTER|DROP|DESCRIBE)\b", message, re.IGNORECASE):
+        message = "client message omitted because it contains SQL"
+    return {
+        "exception_type": f"{type(exc).__module__}.{type(exc).__qualname__}",
+        "operation": operation,
+        "message": _safe_read_message(message, secrets),
+    }
+
+
 def _new_query_id(operation: str) -> str:
     return f"ray-clickhouse-{operation}-{uuid.uuid4()}"
 
@@ -133,7 +198,7 @@ def _lookup_query_diagnostic(
                 logger.debug(
                     "SYSTEM FLUSH LOGS unavailable for query_id=%s: %s",
                     query_id,
-                    exc,
+                    type(exc).__name__,
                 )
         query_log_table = _discover_query_log_table(
             diagnostic_client,
@@ -167,7 +232,7 @@ def _lookup_query_diagnostic(
                 logger.debug(
                     "query_log diagnostic lookup failed for query_id=%s: %s",
                     query_id,
-                    exc,
+                    type(exc).__name__,
                 )
                 return None
             if attempt + 1 < _QUERY_LOG_LOOKUP_ATTEMPTS:
@@ -176,7 +241,7 @@ def _lookup_query_diagnostic(
         logger.debug(
             "query_log diagnostic client failed for query_id=%s: %s",
             query_id,
-            exc,
+            type(exc).__name__,
         )
     finally:
         if diagnostic_client is not None:
@@ -186,7 +251,6 @@ def _lookup_query_diagnostic(
                 logger.debug(
                     "query_log diagnostic client close failed for query_id=%s",
                     query_id,
-                    exc_info=True,
                 )
     return None
 
@@ -220,7 +284,9 @@ def _discover_query_log_table(
         )
     except Exception as exc:
         logger.debug(
-            "query_log table discovery failed for query_id=%s: %s", query_id, exc
+            "query_log table discovery failed for query_id=%s: %s",
+            query_id,
+            type(exc).__name__,
         )
         return None
 
@@ -234,6 +300,9 @@ def _annotate_read_error(
     log_comment: str,
     query_started: bool,
     flush_logs: bool,
+    cause: BaseException,
+    operation: str,
+    secrets: tuple[str, ...],
 ) -> RayClickHouseError:
     diagnostic = (
         _lookup_query_diagnostic(
@@ -246,7 +315,18 @@ def _annotate_read_error(
         if query_started
         else None
     )
-    error.attach_diagnostic(query_id=query_id, diagnostic=diagnostic)
+    if diagnostic is not None:
+        message = diagnostic.get("exception")
+        if isinstance(message, str):
+            diagnostic = {
+                **diagnostic,
+                "exception": _safe_read_message(message, secrets),
+            }
+    error.attach_diagnostic(
+        query_id=query_id,
+        diagnostic=diagnostic,
+        client_diagnostic=_client_read_diagnostic(cause, operation, secrets),
+    )
     return error
 
 
@@ -263,11 +343,15 @@ def stream_query(
     query_id = _new_query_id(query.operation)
     log_comment = f"ray-clickhouse operation={query.operation} query_id={query_id}"
     query_started = False
+    operation = "read client initialization"
+    secrets = _secret_strings((connection.password, query.parameter_dict(), query.sql))
     try:
         try:
             import clickhouse_connect
 
-            client = clickhouse_connect.get_client(**connection.client_kwargs(limits))
+            kwargs = connection.client_kwargs(limits)
+            secrets = _secret_strings((kwargs, query.parameter_dict(), query.sql))
+            client = clickhouse_connect.get_client(**kwargs)
         except BaseException as exc:
             if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
                 raise
@@ -281,13 +365,16 @@ def stream_query(
         settings["query_id"] = query_id
         settings["log_comment"] = log_comment
         query_started = True
+        operation = "Arrow stream setup"
         with client.query_arrow_stream(
             query.sql,
             parameters=query.parameter_dict(),
             settings=settings,
             use_strings=True,
         ) as stream:
+            operation = "Arrow stream iteration"
             for batch in stream:
+                operation = "Arrow conversion"
                 if isinstance(batch, pa.RecordBatch):
                     batch = pa.Table.from_batches([batch])
                 if not isinstance(batch, pa.Table):
@@ -310,6 +397,7 @@ def stream_query(
                     max_rows=limits.batch_rows,
                     max_bytes=limits.batch_bytes,
                 )
+                operation = "Arrow stream iteration"
     except (KeyboardInterrupt, SystemExit, GeneratorExit) as exc:
         failure = exc
         raise
@@ -322,6 +410,9 @@ def stream_query(
             log_comment=log_comment,
             query_started=query_started,
             flush_logs=diagnostic_flush_logs,
+            cause=exc.__context__ or exc,
+            operation=operation,
+            secrets=secrets,
         )
         raise failure from None
     except BaseException as exc:
@@ -334,17 +425,26 @@ def stream_query(
             log_comment=log_comment,
             query_started=query_started,
             flush_logs=diagnostic_flush_logs,
+            cause=exc,
+            operation=operation,
+            secrets=secrets,
         )
         raise failure from None
     finally:
         if client is not None:
             try:
                 client.close()
-            except Exception:
+            except Exception as exc:
                 if failure is None:
-                    raise TransportError(
-                        "failed to close ClickHouse read client"
-                    ) from None
+                    error = TransportError("failed to close ClickHouse read client")
+                    error.attach_diagnostic(
+                        query_id=query_id,
+                        diagnostic=None,
+                        client_diagnostic=_client_read_diagnostic(
+                            exc, "read client close", secrets
+                        ),
+                    )
+                    raise error from None
 
 
 class ClickHouseInsertSession:

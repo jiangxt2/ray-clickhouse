@@ -41,6 +41,12 @@ snapshot or a guarantee of zero scan work.
 
 ## Arrow stream failures and query diagnostics
 
+Inspect `error.client_diagnostic` for the underlying exception type, operation,
+and bounded message. This diagnostic also appears in ordinary Ray tracebacks
+and survives worker error serialization. Raw exception chains remain suppressed
+to protect credentials; SQL-bearing client messages are omitted. Query-log
+details are optional server-provided context.
+
 An Arrow read failure can be reported as `ArrowInvalid`, `IncompleteRead`, or a transport error when ClickHouse fails after an Arrow response has started. Read failures carry the generated query id when available and perform a bounded, best-effort lookup in `system.query_log`. Set `diagnostic_flush_logs=True` on `read_clickhouse()` when the account is allowed to run `SYSTEM FLUSH LOGS` and immediate query-log visibility is required. The diagnostic lookup never replaces the original read exception and may be unavailable when query logging is delayed or permission is missing.
 
 The connector first discovers the available system query-log table with
@@ -57,7 +63,7 @@ WHERE query_id = '<query-id>'
 ORDER BY event_time_microseconds DESC;
 ```
 
-The connector never replays a failed read. If `system.query_log` is unavailable, the original client error and query id remain the authoritative diagnostic result.
+The connector never replays a failed read. If `system.query_log` is unavailable, the client diagnostic and query id remain available.
 
 ## Integration artifacts
 
