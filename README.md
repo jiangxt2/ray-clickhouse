@@ -113,7 +113,15 @@ exception and query ID remain the authoritative result. The diagnostic text is
 server-provided and may include query context, so do not put credentials in query
 predicates or parameters.
 
-`filter` is a trusted predicate fragment, not an arbitrary SQL query. Values must be passed through
+`filter` is a trusted predicate fragment, not an arbitrary SQL query.
+Use `tenant_id = {tenant:Nullable(UInt32)}` with `query_parameters={"tenant": 42}`
+for native server-side binding. Existing `%(tenant)s` client binding remains
+supported. Mixing binding styles or using identifier parameters is rejected.
+Typed parameter-looking text inside quotes/comments is rejected when bindings
+are active. Supported hints are String, FixedString, Bool, Int8/16/32/64,
+UInt8/16/32/64, Float32/64, Date/Date32, DateTime/DateTime64, Decimal/32/64/128,
+and one Nullable wrapper. DateTime64 precision must be 0 through 9; timezone
+hints use a quoted timezone name. Collection and identifier hints are unsupported. Values must be passed through
 `query_parameters`; the connector does not execute arbitrary SQL or provide delete, update,
 upsert, connector-side Distributed shard routing, or exactly-once semantics. `write_mode="overwrite"`
 is destructive and must be selected explicitly. For create/overwrite, nullable columns must be
