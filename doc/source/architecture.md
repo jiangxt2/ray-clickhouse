@@ -46,6 +46,11 @@ skewed work. Range discovery and task queries do not share a snapshot; concurren
 inserts, deletes, or key updates can change coverage. Use stable source data when
 exact coverage is required. No process memory or exactly-once guarantee is added.
 
+Native typed filter parameters use one server binding protocol across range
+discovery and worker queries, including generated partition/range constraints.
+Generated integer endpoints use Int128 to represent exclusive Int64/UInt64
+maximum-plus-one boundaries. The caller's parameter types are preserved.
+
 ## Write path
 
 Writes use `Dataset.write_datasink()` and do not monkey-patch Ray Dataset. Append to an existing supported MergeTree-family table is the default. Generated `create` and `overwrite` modes are explicit and restricted.
