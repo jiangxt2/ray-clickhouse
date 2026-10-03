@@ -36,7 +36,7 @@ from ray_clickhouse._models import (
 )
 from ray_clickhouse._planning import group_partitions, plan_integer_ranges
 from ray_clickhouse._schema import render_read_projection
-from ray_clickhouse._sql import build_select
+from ray_clickhouse._sql import build_select, validate_filter_parameters
 from ray_clickhouse._transport import stream_query
 
 
@@ -64,6 +64,7 @@ class ClickHouseReadConfig:
     diagnostic_flush_logs: bool = False
 
     def __post_init__(self) -> None:
+        validate_filter_parameters(self.filter_sql, dict(self.query_parameters))
         if self.split not in {"single", "partition", "range", "auto"}:
             raise ConfigurationError(
                 "split must be 'single', 'partition', 'range', or 'auto'"

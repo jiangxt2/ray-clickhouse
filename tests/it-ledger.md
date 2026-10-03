@@ -76,6 +76,33 @@
 - Both successful runs use runtime fingerprint `3d47da43cbd029939d1155cdf358ff4fd9a537121bf3424a790b6ee03ee1c70b`. Exact project resources were cleaned; normalized dangling image identities are unchanged.
 - Prior failed evidence is retained. The unsupported public token_provider route claim is withdrawn; production authentication behavior was not expanded.
 
+## Typed read parameters
+
+### Initial full suites
+
+| Suite | Scope | Code/config state | Reason | Result |
+| --- | --- | --- | --- | --- |
+| clickhouse final (ray-clickhouse-typed-read-parameters) | Complete existing and new integration cases | Content SHA256 d350485fa80424dddf006dc4601176d184805c6b501bab42aa64843d49873f20; Python 3.12 / Ray 2.58 / ClickHouse 26.8 | Authorized final run; distinct branch and infrastructure baseline | Passed (exit 0); evidence `.artifacts/implementation/clickhouse-final-d350485fa804` |
+| ray-cluster final (ray-clickhouse-typed-read-parameters) | Complete existing and new integration cases | Content SHA256 d350485fa80424dddf006dc4601176d184805c6b501bab42aa64843d49873f20; Python 3.12 / Ray 2.58 / ClickHouse 26.8 | Authorized final run; distinct branch and infrastructure baseline | Passed (exit 0); evidence `.artifacts/implementation/ray-cluster-final-d350485fa804` |
+
+### Review correction validation
+
+| Suite | Scope | Code/config state | Reason | Result |
+| --- | --- | --- | --- | --- |
+| Complete ClickHouse IT after comment-binding corrections | All 67 collected cases, including single/partition/auto comment bindings | Runtime fingerprint `d2dbf8cc4cad38c14219b40268847b812e46bc1824d9891edf367859cf472067`; detailed files in `.artifacts/review-fixes/summary.json` | Prior 63 passed plus one cluster-only skip cover the previous implementation; comment validation and IT cases changed | Pending explicit rerun approval; not executed |
+| Approved review rerun: clickhouse | Complete suite, 67 collected cases | Runtime fingerprint `d2dbf8cc4cad38c14219b40268847b812e46bc1824d9891edf367859cf472067` | User explicitly approved the planned final rerun; prior runtime evidence covers the previous implementation | passed; exit=0; counts={"total": 67, "passed": 66, "failed_or_error": 0, "skipped": 1}; `.artifacts/review-fixes/clickhouse-d2dbf8cc4cad` |
+
+### Review rerun completion
+
+- The approved complete ClickHouse suite passed 66 cases with one expected cluster-only skip. The runtime fingerprint is unchanged, and exact project resources were cleaned. Normalized dangling image identities match the pre-run baseline.
+
+### Master synchronization validation
+
+| Suite | Scope | Code/config state | Reason | Result |
+| --- | --- | --- | --- | --- |
+| Local static and unit/contract checks | Ruff format/lint, mypy, compatibility, documentation, release checks, and the complete unit/contract suite | Feature combined with master `e6d2f399587580d139a43654af254e981ea8c17e`; runtime fingerprint `8d02f0d4e81943aab650955a6690126ed5a5ee427ad121d75fe19fb365eca407` | User-approved resolution of the shared ledger conflict; production delta against master matches the original feature | Passed: 335 unit/contract cases, no skips; all static checks passed; evidence `.artifacts/conflict-resolution/master-e6d2f3995875-20261003T152113Z/validation.json` |
+| CI ClickHouse and Ray multi-node integration | Combined feature and read-diagnostic cases | Same combined runtime state, pending commit and push | The prior separate-branch IT results remain historical evidence; CI will validate this new combination | Pending authorized commit/push; not executed for this combined state |
+
 ## Trusted query results
 
 ### Initial full suites
@@ -93,3 +120,10 @@
 | --- | --- | --- | --- | --- |
 | Local static and unit/contract checks | Ruff format/lint, mypy, compatibility, documentation, release checks, and the complete unit/contract suite | Feature combined with master `e6d2f399587580d139a43654af254e981ea8c17e`; runtime fingerprint `70e56dbfa7d9a1e516481feb63fd0a34c3938d72f22f76a836446b5821395024` | User-approved resolution of the shared ledger conflict; production delta against master matches the original feature | Passed: 316 unit/contract cases, no skips; all static checks passed; evidence `.artifacts/conflict-resolution/master-e6d2f3995875-20261003T152113Z/validation.json` |
 | CI ClickHouse and Ray multi-node integration | Combined feature and read-diagnostic cases | Same combined runtime state, pending commit and push | The prior separate-branch IT results remain historical evidence; CI will validate this new combination | Pending authorized commit/push; not executed for this combined state |
+
+### Typed parameter integration validation
+
+| Suite | Scope | Code/config state | Reason | Result |
+| --- | --- | --- | --- | --- |
+| Focused binding and query contract checks | tests/unit/test_query.py, tests/unit/test_typed_parameters.py, tests/contract/test_public_api.py; Ruff, mypy and documentation checks | Query feature combined with master `2525e9134a95811b85f1666707d242d6843f6eaa`; runtime fingerprint `59affb8efc22623319a973cd7fa84e6b2bf4d237427a44bf5995182e4100c352` | Query mode now calls the merged typed-parameter validator; run only the directly affected checks | Passed: 106 cases, no skips; all static checks passed; evidence `.artifacts/conflict-resolution/master-2525e9134a95-20261003T155426Z/validation.json` |
+| Prior CI integration evidence | Read diagnostics plus typed parameters, and read diagnostics plus query reads | [Typed-parameter CI](https://github.com/jiangxt2/ray-clickhouse/actions/runs/37133808308) and [Query CI](https://github.com/jiangxt2/ray-clickhouse/actions/runs/37133854786) | Preserve successful separate-combination evidence; no local full suites or infrastructure tests rerun | Historical: typed combination ClickHouse 69 passed plus one cluster-only skip, Ray cluster 70 passed; query combination ClickHouse 44 passed plus one cluster-only skip, Ray cluster 45 passed. These runs do not claim complete three-feature integration coverage |
