@@ -626,7 +626,7 @@ def validate_release_texts(
     ci_fragments = (
         "candidate-record:",
         "needs: [candidate, unit, quality, docs, docs-linkcheck, "
-        "clickhouse-it, package-build, package-smoke]",
+        "clickhouse-it, ray-cluster-it, package-build, package-smoke]",
         "SHA256SUMS",
         "release-candidate.json",
         "artifact-id",

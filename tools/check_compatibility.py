@@ -244,7 +244,7 @@ def validate_compatibility_texts(
             "github.workflow_ref ==",
             "jiangxt2/ray-clickhouse/.github/workflows/ci.yml@refs/heads/master",
             "needs: [candidate, unit, quality, docs, docs-linkcheck, "
-            "clickhouse-it, package-build, package-smoke]",
+            "clickhouse-it, ray-cluster-it, package-build, package-smoke]",
             shared_candidate_ref,
             "artifact-ids: ${{ needs.package-build.outputs.artifact-id }}",
             "digest-mismatch: error",
