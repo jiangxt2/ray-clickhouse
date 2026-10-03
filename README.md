@@ -105,11 +105,13 @@ dataset = read_clickhouse(
 )
 ```
 
-Read failures retain the original client exception and generated query ID. The
+Read failures carry a generated query ID and a bounded `client_diagnostic` with
+the underlying exception type, operation, and safe message context. The
 connector performs a bounded, best-effort lookup in the discovered ClickHouse
 query-log table and appends the server exception code and message when available.
-It never replays the failed SQL; if query logging is unavailable, the original
-exception and query ID remain the authoritative result. The diagnostic text is
+It never replays the failed SQL; if query logging is unavailable, the client
+diagnostic and query ID remain available. Raw exception chains remain suppressed
+to protect credentials. The diagnostic text is
 server-provided and may include query context, so do not put credentials in query
 predicates or parameters.
 

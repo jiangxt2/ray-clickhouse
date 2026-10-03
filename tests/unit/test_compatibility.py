@@ -359,7 +359,7 @@ def test_compatibility_checker_requires_release_readiness_jobs(
         (
             "candidate-record",
             "needs: [candidate, unit, quality, docs, docs-linkcheck, "
-            "clickhouse-it, package-build, package-smoke]",
+            "clickhouse-it, ray-cluster-it, package-build, package-smoke]",
             "needs: [candidate, unit, quality, package-build, package-smoke]",
             "candidate-record job",
         ),

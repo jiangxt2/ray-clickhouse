@@ -12,20 +12,30 @@ class RayClickHouseError(RuntimeError):
         *,
         query_id: str | None = None,
         diagnostic: dict[str, object] | None = None,
+        client_diagnostic: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.query_id = query_id
         self.diagnostic = diagnostic
+        self.client_diagnostic = client_diagnostic
 
     def attach_diagnostic(
         self,
         *,
         query_id: str,
         diagnostic: dict[str, object] | None,
+        client_diagnostic: dict[str, str] | None = None,
     ) -> None:
         self.query_id = query_id
         self.diagnostic = diagnostic
+        self.client_diagnostic = client_diagnostic
         details = [f"query_id={query_id}"]
+        if client_diagnostic is not None:
+            details.append(
+                f"client_exception_type={client_diagnostic['exception_type']}"
+            )
+            details.append(f"operation={client_diagnostic['operation']}")
+            details.append(f"client_exception={client_diagnostic['message']}")
         if diagnostic is not None:
             code = diagnostic.get("exception_code")
             message = diagnostic.get("exception")
