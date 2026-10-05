@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a problem with ray-clickhouse.
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Please search existing issues before reporting a bug. Remove credentials and private data from code, configuration, and logs. Report suspected vulnerabilities privately as described in [SECURITY.md](https://github.com/jiangxt2/ray-clickhouse/blob/master/SECURITY.md).
+
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened + What you expected to happen
+      description: Describe the actual and expected behavior. Include relevant error messages or logs as text.
+    validations:
+      required: true
+
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions / Dependencies
+      description: Include the connector, Ray, database, Python, OS, and relevant driver versions.
+      placeholder: |
+        ray-clickhouse:
+        Ray:
+        Python:
+        PyArrow:
+        ClickHouse:
+        OS:
+        Deployment (local Ray or Ray cluster):
+        Read split or write mode:
+        Driver versions:
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction script
+      description: Provide a minimal script and the steps needed to run it. Include sanitized table definitions and sample data if a database instance is required.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Issue Severity
+      description: How does this issue affect your use of the connector?
+      options:
+        - "Low: It annoys or frustrates me."
+        - "Medium: It is a significant difficulty but I can work around it."
+        - "High: It blocks me from completing my task."
+    validations:
+      required: false
