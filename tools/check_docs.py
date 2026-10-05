@@ -22,6 +22,7 @@ REQUIRED_FILES = (
     "doc/source/troubleshooting.md",
     "doc/source/contributing.md",
     "doc/source/release-notes.md",
+    "release-notes/v1.0.md",
     "release-notes/v0.1.0.md",
 )
 
@@ -33,7 +34,7 @@ README_LINKS = (
     "doc/source/troubleshooting.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
-    "release-notes/v0.1.0.md",
+    "release-notes/v1.0.md",
 )
 
 TOCTREE_ENTRIES = (
@@ -91,6 +92,10 @@ def validate_document_texts(texts: Mapping[str, str]) -> list[str]:
     for path in REQUIRED_FILES:
         if path not in texts:
             errors.append(f"documentation is missing required file: {path}")
+
+    for path in ("README.md", "doc/source/index.md", "release-notes/v1.0.md"):
+        if re.search(r"\balpha\b", texts.get(path, ""), re.IGNORECASE):
+            errors.append(f"{path} must not contain a current Alpha marker")
 
     for path, text in texts.items():
         for line_number, line in enumerate(text.splitlines(), start=1):

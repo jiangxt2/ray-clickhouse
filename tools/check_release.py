@@ -16,8 +16,23 @@ from typing import Any
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 REPOSITORY = "jiangxt2/ray-clickhouse"
 PROJECT = "ray-clickhouse"
-VERSION = "0.1.0"
-TAG = "v0.1.0"
+_PROJECT_VERSION = re.compile(r'^version\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
+_TWO_COMPONENT_VERSION = re.compile(r"[1-9][0-9]*\.(?:0|[1-9][0-9]*)")
+
+
+def project_version(pyproject: Path) -> str:
+    """Read a canonical two-component formal version from project metadata."""
+    match = _PROJECT_VERSION.search(pyproject.read_text(encoding="utf-8"))
+    if match is None:
+        raise ValueError("pyproject.toml must declare a static project version")
+    version = match.group(1)
+    if _TWO_COMPONENT_VERSION.fullmatch(version) is None:
+        raise ValueError("formal version must use canonical major.minor components")
+    return version
+
+
+VERSION = project_version(REPOSITORY_ROOT / "pyproject.toml")
+TAG = f"v{VERSION}"
 CI_WORKFLOW = ".github/workflows/ci.yml"
 RELEASE_WORKFLOW = ".github/workflows/release.yml"
 OPERATIONS = ("dry-run", "testpypi", "release-tag", "pypi", "github-release")
@@ -31,14 +46,14 @@ PREDECESSOR = {
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _USES = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<target>\S+)", re.MULTILINE)
-_WHEEL = re.compile(r"^ray_clickhouse-0\.1\.0-[A-Za-z0-9_.-]+\.whl$")
+_WHEEL = re.compile(rf"^ray_clickhouse-{re.escape(VERSION)}-[A-Za-z0-9_.-]+\.whl$")
 _ARTIFACT_URL = re.compile(
     r"^https://github\.com/jiangxt2/ray-clickhouse/actions/runs/[1-9][0-9]*/artifacts/"
     r"(?P<artifact_id>[1-9][0-9]*)$"
 )
 _INDEX_URLS = {
-    "https://pypi.org/pypi/ray-clickhouse/json",
-    "https://test.pypi.org/pypi/ray-clickhouse/json",
+    f"https://pypi.org/pypi/ray-clickhouse/{VERSION}/json",
+    f"https://test.pypi.org/pypi/ray-clickhouse/{VERSION}/json",
 }
 
 
@@ -99,10 +114,10 @@ def parse_sha256sums(text: str) -> dict[str, str]:
             "SHA256SUMS must contain one wheel and one .tar.gz source archive"
         )
     if _WHEEL.fullmatch(wheels[0]) is None:
-        raise ValueError("SHA256SUMS wheel does not match ray-clickhouse 0.1.0")
-    if sources[0] != "ray_clickhouse-0.1.0.tar.gz":
+        raise ValueError(f"SHA256SUMS wheel does not match ray-clickhouse {VERSION}")
+    if sources[0] != f"ray_clickhouse-{VERSION}.tar.gz":
         raise ValueError(
-            "SHA256SUMS source archive does not match ray-clickhouse 0.1.0"
+            f"SHA256SUMS source archive does not match ray-clickhouse {VERSION}"
         )
     return result
 
@@ -193,7 +208,7 @@ def verify_clickhouse_evidence(directory: Path) -> list[str]:
 def validate_index_data(
     data: Mapping[str, Any], expected: Mapping[str, str]
 ) -> list[str]:
-    """Validate PyPI/TestPyPI JSON data against candidate files."""
+    """Validate version-scoped PyPI/TestPyPI JSON against candidate files."""
     errors: list[str] = []
     info = data.get("info")
     if not isinstance(info, Mapping):
@@ -207,13 +222,10 @@ def validate_index_data(
             errors.append(f"index project name is {name!r}; expected {PROJECT!r}")
         if info.get("version") != VERSION:
             errors.append(
-                f"index current version is {info.get('version')!r}; "
+                f"index release version is {info.get('version')!r}; "
                 f"expected {VERSION!r}"
             )
-    releases = data.get("releases")
-    if not isinstance(releases, Mapping):
-        return ["index response is missing releases"]
-    files = releases.get(VERSION)
+    files = data.get("urls")
     if not isinstance(files, Sequence) or isinstance(files, (str, bytes)):
         return [f"index response is missing release {VERSION}"]
     observed: dict[str, str] = {}
@@ -328,9 +340,9 @@ def _validate_external_state(
         return
     if operation in {"testpypi", "pypi"}:
         expected_url = (
-            "https://test.pypi.org/pypi/ray-clickhouse/json"
+            f"https://test.pypi.org/pypi/ray-clickhouse/{VERSION}/json"
             if operation == "testpypi"
-            else "https://pypi.org/pypi/ray-clickhouse/json"
+            else f"https://pypi.org/pypi/ray-clickhouse/{VERSION}/json"
         )
         if (
             state.get("index_url") != expected_url
@@ -491,7 +503,7 @@ def validate_release_texts(
     """Return release metadata and workflow policy errors."""
     errors: list[str] = []
     pyproject_fragments = (
-        'version = "0.1.0"',
+        f'version = "{VERSION}"',
         'license = "Apache-2.0"',
         'license-files = ["LICENSE"]',
         '"Typing :: Typed"',
@@ -506,8 +518,14 @@ def validate_release_texts(
     for fragment in pyproject_fragments:
         if fragment not in pyproject:
             errors.append(f"pyproject is missing release metadata: {fragment!r}")
-    if "Maturity: Alpha." not in release_notes:
-        errors.append("release notes must state the permanent Alpha maturity")
+    for label, text in (
+        ("package metadata", pyproject),
+        ("release notes", release_notes),
+    ):
+        if re.search(r"\balpha\b", text, re.IGNORECASE):
+            errors.append(f"current {label} must not contain an Alpha marker")
+    if f"# ray-clickhouse {VERSION}\n" not in release_notes:
+        errors.append("release notes must identify the current project version")
     for phrase in ("not yet published", "release candidate"):
         if phrase in release_notes.lower():
             errors.append(
@@ -557,6 +575,7 @@ def validate_release_texts(
         "predecessor_receipt_artifact_digest:",
         "--predecessor-run-id",
         "--expected-run-id",
+        f"--expected-version {VERSION}",
         "environment: release-tag",
         "environment: testpypi",
         "environment: pypi",
@@ -570,7 +589,9 @@ def validate_release_texts(
         '--source-digest "${CANDIDATE_SHA}"',
         "--source-ref refs/heads/master",
         "--no-deps",
-        "refs/tags/v0.1.0^{}",
+        f"refs/tags/{TAG}^{{}}",
+        f"https://pypi.org/pypi/ray-clickhouse/{VERSION}/json",
+        f"https://test.pypi.org/pypi/ray-clickhouse/{VERSION}/json",
         "promotion-receipt.json",
         "Record promotion receipt identity",
         "RECEIPT_DIGEST: sha256:${{ steps.upload-receipt.outputs.artifact-digest }}",
@@ -712,7 +733,7 @@ def run_checks(root: Path = REPOSITORY_ROOT) -> list[str]:
         (root / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
         (root / ".github/workflows/release.yml").read_text(encoding="utf-8"),
         (root / "pyproject.toml").read_text(encoding="utf-8"),
-        (root / "release-notes/v0.1.0.md").read_text(encoding="utf-8"),
+        (root / f"release-notes/v{VERSION}.md").read_text(encoding="utf-8"),
     )
 
 
@@ -750,6 +771,7 @@ def _parser() -> argparse.ArgumentParser:
     verify_candidate.add_argument("--record", type=Path, required=True)
     verify_candidate.add_argument("--candidate-sha")
     verify_candidate.add_argument("--source-run-id", type=int)
+    verify_candidate.add_argument("--expected-version")
 
     receipt = subparsers.add_parser("create-promotion-receipt")
     receipt.add_argument("--output", type=Path, required=True)
@@ -815,6 +837,10 @@ def _run_command(args: argparse.Namespace) -> list[str]:
         _write_json(args.output, created_candidate)
         return []
     if args.command == "verify-candidate-record":
+        if args.expected_version is not None and args.expected_version != VERSION:
+            return [
+                f"candidate version is {VERSION!r}; expected {args.expected_version!r}"
+            ]
         candidate_record = _read_json(args.record)
         validate_candidate_record(candidate_record)
         if (

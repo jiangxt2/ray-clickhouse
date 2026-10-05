@@ -4,9 +4,9 @@ Ray Data read and append connector for ClickHouse physical tables.
 
 > [!IMPORTANT]
 > `ray-clickhouse` is community-maintained and is not an official Ray or ClickHouse project.
-> Version `0.1.0` is an Alpha release.
+> Version `1.0` follows the two-component `major.minor` release route.
 
-The first release provides:
+This release provides:
 
 - structured physical-table reads returning `ray.data.Dataset`;
 - single-query reads from direct tables, Views, and Distributed tables;
@@ -16,7 +16,7 @@ The first release provides:
 - structured ordering and Ray task resource passthrough;
 - fail-closed schema, type, permission, timeout, and ambiguous-write errors.
 
-The first release does not provide arbitrary SQL execution, arbitrary DDL, delete, update, upsert,
+The connector does not provide arbitrary SQL execution, arbitrary DDL, delete, update, upsert,
 connector-side Distributed shard routing, cross-task transactions, or exactly-once guarantees.
 Distributed reads use one ClickHouse query; ClickHouse owns shard routing.
 
@@ -58,11 +58,11 @@ classes are internal and are not independent compatibility promises.
 - [Troubleshooting](doc/source/troubleshooting.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
-- [Release notes](release-notes/v0.1.0.md)
+- [Release notes](release-notes/v1.0.md)
 
 ## Query result reads
 
-The development API also accepts a trusted query source. Query reads require
+The read API also accepts a trusted query source. Query reads require
 exactly one of `table` or `query`, use one data-read task, and infer the
 result schema with DESCRIBE and a zero-row Arrow probe.
 

@@ -1,6 +1,6 @@
 [project]
 name = "ray-clickhouse"
-version = "0.1.0"
+version = "1.0"
 description = "Ray Data read and append connector for ClickHouse physical tables"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
@@ -8,7 +8,6 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{name = "jiangxt2"}]
 classifiers = [
-    "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
