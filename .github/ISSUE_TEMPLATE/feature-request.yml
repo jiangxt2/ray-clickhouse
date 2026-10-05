@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest an improvement to ray-clickhouse.
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Please search existing issues before proposing a feature. Remove credentials and private data from examples.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the behavior you would like to see.
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Explain what you are trying to achieve and why the current behavior does not meet that need.
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add relevant examples, constraints, alternatives, or links to related issues.
+    validations:
+      required: false

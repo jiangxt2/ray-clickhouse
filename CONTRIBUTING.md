@@ -1,6 +1,6 @@
 # Contributing
 
-`ray-clickhouse` is a community-maintained independent connector. Planned repository development is performed through maintainer-approved internal worktrees and does not use GitHub Issues or pull requests. Contact the repository owner before preparing an external contribution so that scope, ownership, and a private coordination channel can be agreed without publishing sensitive details.
+`ray-clickhouse` is a community-maintained independent connector. Planned repository development is performed through maintainer-approved internal worktrees. Use the repository's Issue templates to report bugs, suggest features, or improve documentation, and use the pull request template when submitting a contribution. Open an issue before a large API or architecture change so that scope, ownership, compatibility, and test expectations can be agreed on first. Report suspected vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## Development setup
 

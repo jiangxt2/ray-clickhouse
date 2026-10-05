@@ -1,0 +1,20 @@
+name: Documentation
+description: Report a problem or suggest an improvement to the ray-clickhouse documentation.
+title: "[Docs] "
+labels: [documentation]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe what is incorrect, missing, or unclear and what you would like to see instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: link
+    attributes:
+      label: Link
+      description: Link to the affected page or provide its repository path and section heading.
+    validations:
+      required: false
