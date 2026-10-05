@@ -281,7 +281,7 @@ jobs:
             "${packages[0]}"
           uv pip check --python .venv-wheel/bin/python
           .venv-wheel/bin/python -c \
-            "from importlib.metadata import distribution, version; import clickhouse_connect, pyarrow, ray, ray_clickhouse; d = distribution('ray-clickhouse'); assert version('ray-clickhouse') == '0.1.0'; assert d.locate_file('ray_clickhouse/py.typed').is_file(); assert d.metadata['License-Expression'] == 'Apache-2.0'; assert d.metadata['Description-Content-Type'] == 'text/markdown'; assert 'Typing :: Typed' in d.metadata.get_all('Classifier'); print(ray.__version__)"
+            "from importlib.metadata import distribution, version; import clickhouse_connect, pyarrow, ray, ray_clickhouse; d = distribution('ray-clickhouse'); assert version('ray-clickhouse') == '1.0'; assert d.locate_file('ray_clickhouse/py.typed').is_file(); assert d.metadata['License-Expression'] == 'Apache-2.0'; assert d.metadata['Description-Content-Type'] == 'text/markdown'; assert 'Typing :: Typed' in d.metadata.get_all('Classifier'); print(ray.__version__)"
       - name: Install and check source distribution
         if: matrix.python == '3.12'
         run: |
@@ -295,7 +295,7 @@ jobs:
             "${packages[0]}"
           uv pip check --python .venv-sdist/bin/python
           .venv-sdist/bin/python -c \
-            "from importlib.metadata import distribution, version; import clickhouse_connect, pyarrow, ray, ray_clickhouse; d = distribution('ray-clickhouse'); assert version('ray-clickhouse') == '0.1.0'; assert d.locate_file('ray_clickhouse/py.typed').is_file(); assert d.metadata['License-Expression'] == 'Apache-2.0'; assert d.metadata['Description-Content-Type'] == 'text/markdown'; assert 'Typing :: Typed' in d.metadata.get_all('Classifier'); print(ray.__version__)"
+            "from importlib.metadata import distribution, version; import clickhouse_connect, pyarrow, ray, ray_clickhouse; d = distribution('ray-clickhouse'); assert version('ray-clickhouse') == '1.0'; assert d.locate_file('ray_clickhouse/py.typed').is_file(); assert d.metadata['License-Expression'] == 'Apache-2.0'; assert d.metadata['Description-Content-Type'] == 'text/markdown'; assert 'Typing :: Typed' in d.metadata.get_all('Classifier'); print(ray.__version__)"
 
   candidate-record:
     name: Record release candidate

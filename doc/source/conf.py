@@ -1,6 +1,6 @@
 project = "ray-clickhouse"
 author = "jiangxt2"
-release = "0.1.0"
+release = "1.0"
 
 extensions = ["myst_parser"]
 source_suffix = {".md": "markdown"}
@@ -11,4 +11,4 @@ nitpicky = True
 myst_enable_extensions = ["colon_fence", "deflist"]
 
 html_theme = "alabaster"
-html_title = "ray-clickhouse 0.1.0"
+html_title = "ray-clickhouse 1.0"

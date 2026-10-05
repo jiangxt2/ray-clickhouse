@@ -1452,7 +1452,7 @@ data = [
 
 [[package]]
 name = "ray-clickhouse"
-version = "0.1.0"
+version = "1.0"
 source = { editable = "." }
 dependencies = [
     { name = "clickhouse-connect", extra = ["arrow"] },

@@ -28,19 +28,28 @@ make -C doc spelling
 
 Run `make -C doc linkcheck` as the separately diagnosable external-link validation.
 
+## Version route
+
+Formal releases use exactly two components: `major.minor`. Compatible releases increment minor, for example `1.0`, `1.1`, `1.2`, and `1.10`, without a preset minor limit. Increment major only for approved breaking changes. Do not use three-component patch versions such as `1.0.1`. Package metadata, the annotated `v<version>` tag, distribution filenames, and `release-notes/v<version>.md` must agree exactly.
+
 ## Release operations
 
 The `master`-push CI run is the only release-candidate producer. It builds and attests one wheel/source-distribution pair, records their checksums and artifact identities, and persists the ClickHouse integration evidence from the same commit. `.github/workflows/release.yml` only promotes those recorded files; it never rebuilds them.
 
-For a local package-integrity check after `uv build`, create the same checksum manifest and verify the exact file set:
+For a local package-integrity check after `uv build`, stage only the distributions in a fresh temporary directory. The build output may also contain `.gitignore`, which is not a release asset. Create the checksum manifest and verify the exact staged file set:
 
 ```bash
-cd dist
-sha256sum -- *.whl *.tar.gz > SHA256SUMS
-cd ..
+release_stage=$(mktemp -d)
+cp dist/*.whl dist/*.tar.gz "${release_stage}/"
+(
+  cd "${release_stage}"
+  sha256sum -- *.whl *.tar.gz > SHA256SUMS
+)
 uv run python tools/check_release.py verify-files \
-  --directory dist --sha256sums dist/SHA256SUMS
+  --directory "${release_stage}" --sha256sums "${release_stage}/SHA256SUMS"
 ```
+
+Index preflight and recovery checks use the target-version JSON endpoint. Existing older releases do not block a new version; an existing target version must match the candidate files exactly.
 
 Promotion uses separate approved workflow runs in this fixed order: `dry-run`, `testpypi`, `release-tag`, `pypi`, and `github-release`. Each successful run records a receipt whose artifact ID and digest are required by the next operation. Missing, expired, mismatched, or out-of-order candidate artifacts and receipts stop the release.
 

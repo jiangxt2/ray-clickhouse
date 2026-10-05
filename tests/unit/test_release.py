@@ -14,6 +14,7 @@ from tools.check_release import (
     create_candidate_record,
     create_promotion_receipt,
     parse_sha256sums,
+    project_version,
     run_checks,
     validate_candidate_record,
     validate_index_data,
@@ -27,8 +28,8 @@ from tools.check_release import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SHA = "a" * 40
 DIGEST = "sha256:" + "b" * 64
-WHEEL = "ray_clickhouse-0.1.0-py3-none-any.whl"
-SDIST = "ray_clickhouse-0.1.0.tar.gz"
+WHEEL = "ray_clickhouse-1.0-py3-none-any.whl"
+SDIST = "ray_clickhouse-1.0.tar.gz"
 FILES = {WHEEL: "c" * 64, SDIST: "d" * 64}
 FILE_SIZES = {WHEEL: 100, SDIST: 200}
 
@@ -38,7 +39,7 @@ def _repository_texts() -> tuple[str, str, str, str]:
         (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
         (REPOSITORY_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"),
         (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8"),
-        (REPOSITORY_ROOT / "release-notes/v0.1.0.md").read_text(encoding="utf-8"),
+        (REPOSITORY_ROOT / "release-notes/v1.0.md").read_text(encoding="utf-8"),
     )
 
 
@@ -69,21 +70,21 @@ def _external_state(operation: str) -> dict[str, object]:
         host = "test.pypi.org" if operation == "testpypi" else "pypi.org"
         return {
             "operation": operation,
-            "index_url": f"https://{host}/pypi/ray-clickhouse/json",
+            "index_url": f"https://{host}/pypi/ray-clickhouse/1.0/json",
             "project": "ray-clickhouse",
-            "version": "0.1.0",
+            "version": "1.0",
             "files": FILES,
         }
     if operation == "release-tag":
         return {
             "operation": operation,
-            "tag": "v0.1.0",
+            "tag": "v1.0",
             "tag_type": "annotated",
             "target": SHA,
         }
     return {
         "operation": operation,
-        "tag": "v0.1.0",
+        "tag": "v1.0",
         "target": SHA,
         "assets": {**FILES, "SHA256SUMS": "e" * 64},
     }
@@ -136,6 +137,65 @@ def test_repository_release_contracts_match() -> None:
     assert run_checks() == []
 
 
+@pytest.mark.parametrize(
+    ("expected_version", "returncode"), (("1.0", 0), ("0.1.0", 1), ("1.1", 1))
+)
+def test_candidate_cli_requires_requested_release_version(
+    expected_version: str, returncode: int, tmp_path: Path
+) -> None:
+    record = tmp_path / "candidate.json"
+    _write_json(record, _candidate())
+
+    result = _release_cli(
+        "verify-candidate-record",
+        "--record",
+        str(record),
+        "--candidate-sha",
+        SHA,
+        "--source-run-id",
+        "11",
+        "--expected-version",
+        expected_version,
+    )
+
+    assert result.returncode == returncode
+    if returncode:
+        assert f"expected {expected_version!r}" in result.stderr
+    else:
+        assert "Release checks passed." in result.stdout
+
+
+@pytest.mark.parametrize("version", ("1.0", "1.1", "1.10", "2.0", "2.17"))
+def test_formal_version_route_has_no_minor_ceiling(
+    version: str, tmp_path: Path
+) -> None:
+    metadata = tmp_path / "pyproject.toml"
+    metadata.write_text(f'version = "{version}"\n', encoding="utf-8")
+
+    assert project_version(metadata) == version
+
+
+@pytest.mark.parametrize(
+    "version", ("1", "1.0.1", "1.1.1", "v1.0", "1.0rc1", "01.0", "1.01", "0.1")
+)
+def test_formal_version_route_rejects_noncanonical_versions(
+    version: str, tmp_path: Path
+) -> None:
+    metadata = tmp_path / "pyproject.toml"
+    metadata.write_text(f'version = "{version}"\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="major.minor"):
+        project_version(metadata)
+
+
+def test_formal_version_requires_static_metadata(tmp_path: Path) -> None:
+    metadata = tmp_path / "pyproject.toml"
+    metadata.write_text('dynamic = ["version"]\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="static project version"):
+        project_version(metadata)
+
+
 def test_sha256sums_requires_one_wheel_and_one_source_archive() -> None:
     text = f"{FILES[WHEEL]}  {WHEEL}\n{FILES[SDIST]}  {SDIST}\n"
 
@@ -144,10 +204,10 @@ def test_sha256sums_requires_one_wheel_and_one_source_archive() -> None:
     with pytest.raises(ValueError, match="one wheel"):
         parse_sha256sums(f"{FILES[WHEEL]}  {WHEEL}\n")
 
-    with pytest.raises(ValueError, match="ray-clickhouse 0.1.0"):
+    with pytest.raises(ValueError, match="ray-clickhouse 1.0"):
         parse_sha256sums(
-            f"{FILES[WHEEL]}  other-0.1.0-py3-none-any.whl\n"
-            f"{FILES[SDIST]}  other-0.1.0.tar.gz\n"
+            f"{FILES[WHEEL]}  other-1.0-py3-none-any.whl\n"
+            f"{FILES[SDIST]}  other-1.0.tar.gz\n"
         )
 
 
@@ -373,19 +433,49 @@ def test_verify_files_detects_missing_unexpected_and_mismatch(tmp_path: Path) ->
 
 def test_index_identity_requires_exact_candidate_files() -> None:
     data = {
-        "info": {"name": "ray-clickhouse", "version": "0.1.0"},
-        "releases": {
-            "0.1.0": [
-                {"filename": name, "digests": {"sha256": digest}}
-                for name, digest in FILES.items()
-            ]
-        },
+        "info": {"name": "ray-clickhouse", "version": "1.0"},
+        "urls": [
+            {"filename": name, "digests": {"sha256": digest}}
+            for name, digest in FILES.items()
+        ],
     }
 
     assert validate_index_data(data, FILES) == []
 
-    data["releases"]["0.1.0"][0]["digests"]["sha256"] = "0" * 64
+    data["urls"][0]["digests"]["sha256"] = "0" * 64
     assert validate_index_data(data, FILES)
+
+
+@pytest.mark.parametrize("version", ("0.1.0", "1.1"))
+def test_index_identity_rejects_another_release_version(version: str) -> None:
+    data = {
+        "info": {"name": "ray-clickhouse", "version": version},
+        "urls": [
+            {"filename": name, "digests": {"sha256": digest}}
+            for name, digest in FILES.items()
+        ],
+    }
+
+    assert any("release version" in error for error in validate_index_data(data, FILES))
+
+
+def test_index_identity_rejects_missing_version_files() -> None:
+    data = {"info": {"name": "ray-clickhouse", "version": "1.0"}, "urls": []}
+
+    assert any("file identity" in error for error in validate_index_data(data, FILES))
+
+
+def test_release_index_cli_rejects_project_wide_endpoint() -> None:
+    result = _release_cli(
+        "verify-index",
+        "--json-url",
+        "https://pypi.org/pypi/ray-clickhouse/json",
+        "--sha256sums",
+        "unused-checksums",
+    )
+
+    assert result.returncode == 1
+    assert "approved PyPI endpoint" in result.stderr
 
 
 def test_clickhouse_evidence_requires_passing_junit_and_logs(tmp_path: Path) -> None:
@@ -430,6 +520,8 @@ def test_clickhouse_evidence_requires_passing_junit_and_logs(tmp_path: Path) -> 
             "RECORD_DIGEST",
         ),
         (1, "- github-release", "- publish-all", "github-release"),
+        (1, "--expected-version 1.0", "", "expected-version"),
+        (1, "--expected-version 1.0", "--expected-version 0.1.0", "expected-version"),
         (
             1,
             "inputs.operation == 'pypi'",
@@ -489,7 +581,7 @@ def test_clickhouse_evidence_requires_passing_junit_and_logs(tmp_path: Path) -> 
         ),
         (
             3,
-            "Maturity: Alpha.",
+            "# ray-clickhouse 1.0",
             "Status: release candidate; not yet published",
             "temporary publication state",
         ),
@@ -514,6 +606,14 @@ def test_predecessor_map_is_complete_and_linear() -> None:
         "pypi": "release-tag",
         "github-release": "pypi",
     }
+
+
+@pytest.mark.parametrize("source_index", (2, 3))
+def test_release_checker_rejects_current_alpha_marker(source_index: int) -> None:
+    sources = list(_repository_texts())
+    sources[source_index] += "\n# Alpha\n"
+
+    assert any("Alpha marker" in error for error in validate_release_texts(*sources))
 
 
 @pytest.mark.parametrize(

@@ -188,6 +188,7 @@ jobs:
           --record validated/candidate-record/release-candidate.json
           --candidate-sha "${CANDIDATE_SHA}"
           --source-run-id "${SOURCE_RUN_ID}"
+          --expected-version 1.0
       - name: Verify distribution and evidence artifact API identity
         env:
           GH_TOKEN: ${{ github.token }}
@@ -398,15 +399,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v0.1.0" >/dev/null 2>&1; then
-            echo "v0.1.0 already exists" >&2
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v1.0" >/dev/null 2>&1; then
+            echo "v1.0 already exists" >&2
             exit 1
           fi
           pypi_code=$(curl -sS -o pypi.json -w '%{http_code}' \
-            https://pypi.org/pypi/ray-clickhouse/json)
+            https://pypi.org/pypi/ray-clickhouse/1.0/json)
           test "${pypi_code}" = "404"
           testpypi_code=$(curl -sS -o testpypi.json -w '%{http_code}' \
-            https://test.pypi.org/pypi/ray-clickhouse/json)
+            https://test.pypi.org/pypi/ray-clickhouse/1.0/json)
           test "${testpypi_code}" = "404"
           printf '{"operation":"dry-run","pypi":"absent","testpypi":"absent","tag":"absent"}\n' \
             > external-state.json
@@ -471,10 +472,10 @@ jobs:
         id: state
         run: |
           code=$(curl -sS -o testpypi.json -w '%{http_code}' \
-            https://test.pypi.org/pypi/ray-clickhouse/json)
+            https://test.pypi.org/pypi/ray-clickhouse/1.0/json)
           if [[ "${code}" == "200" ]]; then
             python3 tools/check_release.py verify-index \
-              --json-url https://test.pypi.org/pypi/ray-clickhouse/json \
+              --json-url https://test.pypi.org/pypi/ray-clickhouse/1.0/json \
               --sha256sums validated/candidate-distributions/SHA256SUMS \
               --output external-state.json
             echo "publish=false" >> "${GITHUB_OUTPUT}"
@@ -500,7 +501,7 @@ jobs:
         run: |
           for attempt in {1..12}; do
             if python3 tools/check_release.py verify-index \
-              --json-url https://test.pypi.org/pypi/ray-clickhouse/json \
+              --json-url https://test.pypi.org/pypi/ray-clickhouse/1.0/json \
               --sha256sums validated/candidate-distributions/SHA256SUMS \
               --output external-state.json; then
               break
@@ -511,7 +512,7 @@ jobs:
           mkdir testpypi-download
           python3 -m pip download --no-deps --only-binary=:all: \
             --index-url https://test.pypi.org/simple/ \
-            ray-clickhouse==0.1.0 --dest testpypi-download
+            ray-clickhouse==1.0 --dest testpypi-download
           grep '\.whl$' validated/candidate-distributions/SHA256SUMS \
             > testpypi-wheel.SHA256SUMS
           (cd testpypi-download && sha256sum --check ../testpypi-wheel.SHA256SUMS)
@@ -540,7 +541,7 @@ jobs:
               "read_clickhouse",
               "write_clickhouse",
           }
-          assert version("ray-clickhouse") == "0.1.0"
+          assert version("ray-clickhouse") == "1.0"
           assert set(ray_clickhouse.__all__) == expected
           assert distribution("ray-clickhouse").locate_file(
               "ray_clickhouse/py.typed"
@@ -613,7 +614,7 @@ jobs:
       - name: Revalidate TestPyPI files
         run: >-
           python3 tools/check_release.py verify-index
-          --json-url https://test.pypi.org/pypi/ray-clickhouse/json
+          --json-url https://test.pypi.org/pypi/ray-clickhouse/1.0/json
           --sha256sums validated/candidate-distributions/SHA256SUMS
           --output testpypi-state.json
       - name: Create or recover annotated tag
@@ -622,7 +623,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_SHA: ${{ needs.validate.outputs.candidate-sha }}
         run: |
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v0.1.0" > tag-ref.json 2>/dev/null; then
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v1.0" > tag-ref.json 2>/dev/null; then
             test "$(jq -r '.object.type' tag-ref.json)" = "tag"
             tag_object=$(jq -r '.object.sha' tag-ref.json)
             gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" > tag-object.json
@@ -631,27 +632,27 @@ jobs:
             result=recovered
           else
             tag_object=$(gh api --method POST "repos/${GITHUB_REPOSITORY}/git/tags" \
-              -f tag=v0.1.0 \
-              -f message='ray-clickhouse 0.1.0' \
+              -f tag=v1.0 \
+              -f message='ray-clickhouse 1.0' \
               -f object="${CANDIDATE_SHA}" \
               -f type=commit --jq '.sha')
             gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-              -f ref=refs/tags/v0.1.0 -f sha="${tag_object}" >/dev/null
+              -f ref=refs/tags/v1.0 -f sha="${tag_object}" >/dev/null
             result=success
           fi
-          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v0.1.0" > tag-ref.json
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v1.0" > tag-ref.json
           test "$(jq -r '.object.type' tag-ref.json)" = "tag"
           tag_object=$(jq -r '.object.sha' tag-ref.json)
           gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" > tag-object.json
-          test "$(jq -r '.tag' tag-object.json)" = "v0.1.0"
+          test "$(jq -r '.tag' tag-object.json)" = "v1.0"
           test "$(jq -r '.object.type' tag-object.json)" = "commit"
           test "$(jq -r '.object.sha' tag-object.json)" = "${CANDIDATE_SHA}"
           git fetch --force --no-tags origin \
-            refs/tags/v0.1.0:refs/tags/v0.1.0
-          test "$(git cat-file -t refs/tags/v0.1.0)" = "tag"
-          test "$(git rev-parse 'refs/tags/v0.1.0^{}')" = "${CANDIDATE_SHA}"
+            refs/tags/v1.0:refs/tags/v1.0
+          test "$(git cat-file -t refs/tags/v1.0)" = "tag"
+          test "$(git rev-parse 'refs/tags/v1.0^{}')" = "${CANDIDATE_SHA}"
           jq -n --arg operation release-tag --arg result "${result}" \
-            --arg tag v0.1.0 --arg target "${CANDIDATE_SHA}" \
+            --arg tag v1.0 --arg target "${CANDIDATE_SHA}" \
             '{operation:$operation,result:$result,tag:$tag,tag_type:"annotated",target:$target}' \
             > external-state.json
           echo "result=${result}" >> "${GITHUB_OUTPUT}"
@@ -726,27 +727,27 @@ jobs:
           CANDIDATE_SHA: ${{ needs.validate.outputs.candidate-sha }}
         run: |
           python3 tools/check_release.py verify-index \
-            --json-url https://test.pypi.org/pypi/ray-clickhouse/json \
+            --json-url https://test.pypi.org/pypi/ray-clickhouse/1.0/json \
             --sha256sums validated/candidate-distributions/SHA256SUMS
-          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v0.1.0" > tag-ref.json
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v1.0" > tag-ref.json
           test "$(jq -r '.object.type' tag-ref.json)" = "tag"
           tag_object=$(jq -r '.object.sha' tag-ref.json)
           gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" > tag-object.json
-          test "$(jq -r '.tag' tag-object.json)" = "v0.1.0"
+          test "$(jq -r '.tag' tag-object.json)" = "v1.0"
           test "$(jq -r '.object.type' tag-object.json)" = "commit"
           test "$(jq -r '.object.sha' tag-object.json)" = "${CANDIDATE_SHA}"
           git fetch --force --no-tags origin \
-            refs/tags/v0.1.0:refs/tags/v0.1.0
-          test "$(git cat-file -t refs/tags/v0.1.0)" = "tag"
-          test "$(git rev-parse 'refs/tags/v0.1.0^{}')" = "${CANDIDATE_SHA}"
+            refs/tags/v1.0:refs/tags/v1.0
+          test "$(git cat-file -t refs/tags/v1.0)" = "tag"
+          test "$(git rev-parse 'refs/tags/v1.0^{}')" = "${CANDIDATE_SHA}"
       - name: Check PyPI state
         id: state
         run: |
           code=$(curl -sS -o pypi.json -w '%{http_code}' \
-            https://pypi.org/pypi/ray-clickhouse/json)
+            https://pypi.org/pypi/ray-clickhouse/1.0/json)
           if [[ "${code}" == "200" ]]; then
             python3 tools/check_release.py verify-index \
-              --json-url https://pypi.org/pypi/ray-clickhouse/json \
+              --json-url https://pypi.org/pypi/ray-clickhouse/1.0/json \
               --sha256sums validated/candidate-distributions/SHA256SUMS \
               --output external-state.json
             echo "publish=false" >> "${GITHUB_OUTPUT}"
@@ -771,7 +772,7 @@ jobs:
         run: |
           for attempt in {1..12}; do
             if python3 tools/check_release.py verify-index \
-              --json-url https://pypi.org/pypi/ray-clickhouse/json \
+              --json-url https://pypi.org/pypi/ray-clickhouse/1.0/json \
               --sha256sums validated/candidate-distributions/SHA256SUMS \
               --output external-state.json; then
               break
@@ -849,45 +850,45 @@ jobs:
           CANDIDATE_SHA: ${{ needs.validate.outputs.candidate-sha }}
         run: |
           python3 tools/check_release.py verify-index \
-            --json-url https://pypi.org/pypi/ray-clickhouse/json \
+            --json-url https://pypi.org/pypi/ray-clickhouse/1.0/json \
             --sha256sums validated/candidate-distributions/SHA256SUMS
-          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v0.1.0" > tag-ref.json
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v1.0" > tag-ref.json
           test "$(jq -r '.object.type' tag-ref.json)" = "tag"
           tag_object=$(jq -r '.object.sha' tag-ref.json)
           gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" > tag-object.json
-          test "$(jq -r '.tag' tag-object.json)" = "v0.1.0"
+          test "$(jq -r '.tag' tag-object.json)" = "v1.0"
           test "$(jq -r '.object.type' tag-object.json)" = "commit"
           test "$(jq -r '.object.sha' tag-object.json)" = "${CANDIDATE_SHA}"
           git fetch --force --no-tags origin \
-            refs/tags/v0.1.0:refs/tags/v0.1.0
-          test "$(git cat-file -t refs/tags/v0.1.0)" = "tag"
-          test "$(git rev-parse 'refs/tags/v0.1.0^{}')" = "${CANDIDATE_SHA}"
+            refs/tags/v1.0:refs/tags/v1.0
+          test "$(git cat-file -t refs/tags/v1.0)" = "tag"
+          test "$(git rev-parse 'refs/tags/v1.0^{}')" = "${CANDIDATE_SHA}"
       - name: Create or recover GitHub Release
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_SHA: ${{ needs.validate.outputs.candidate-sha }}
         run: |
-          if gh release view v0.1.0 --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+          if gh release view v1.0 --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             result=recovered
           else
-            gh release create v0.1.0 \
+            gh release create v1.0 \
               validated/candidate-distributions/*.whl \
               validated/candidate-distributions/*.tar.gz \
               validated/candidate-distributions/SHA256SUMS \
               --repo "${GITHUB_REPOSITORY}" \
               --verify-tag \
-              --title "ray-clickhouse 0.1.0" \
-              --notes-file release-notes/v0.1.0.md
+              --title "ray-clickhouse 1.0" \
+              --notes-file release-notes/v1.0.md
             result=success
           fi
-          gh release view v0.1.0 --repo "${GITHUB_REPOSITORY}" \
+          gh release view v1.0 --repo "${GITHUB_REPOSITORY}" \
             --json id,isDraft,isPrerelease,tagName,url > release-state.json
-          test "$(jq -r '.tagName' release-state.json)" = "v0.1.0"
+          test "$(jq -r '.tagName' release-state.json)" = "v1.0"
           test "$(jq -r '.isDraft' release-state.json)" = "false"
           test "$(jq -r '.isPrerelease' release-state.json)" = "false"
           mkdir release-download
-          gh release download v0.1.0 --repo "${GITHUB_REPOSITORY}" \
+          gh release download v1.0 --repo "${GITHUB_REPOSITORY}" \
             --dir release-download
           python3 tools/check_release.py record-github-release-state \
             --directory release-download \
