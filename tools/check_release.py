@@ -20,18 +20,23 @@ _PROJECT_VERSION = re.compile(r'^version\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 _TWO_COMPONENT_VERSION = re.compile(r"[1-9][0-9]*\.(?:0|[1-9][0-9]*)")
 
 
-def project_version(pyproject: Path) -> str:
-    """Read a canonical two-component formal version from project metadata."""
+def project_version(pyproject: Path, *, allow_development: bool = False) -> str:
+    """Read a canonical formal version, or explicitly allow a development checkout."""
     match = _PROJECT_VERSION.search(pyproject.read_text(encoding="utf-8"))
     if match is None:
         raise ValueError("pyproject.toml must declare a static project version")
     version = match.group(1)
-    if _TWO_COMPONENT_VERSION.fullmatch(version) is None:
+    development = (
+        allow_development
+        and re.fullmatch(rf"{_TWO_COMPONENT_VERSION.pattern}\.dev0", version)
+        is not None
+    )
+    if _TWO_COMPONENT_VERSION.fullmatch(version) is None and not development:
         raise ValueError("formal version must use canonical major.minor components")
     return version
 
 
-VERSION = project_version(REPOSITORY_ROOT / "pyproject.toml")
+VERSION = project_version(REPOSITORY_ROOT / "pyproject.toml", allow_development=True)
 TAG = f"v{VERSION}"
 CI_WORKFLOW = ".github/workflows/ci.yml"
 RELEASE_WORKFLOW = ".github/workflows/release.yml"
@@ -285,6 +290,7 @@ def create_candidate_record(
 
 def validate_candidate_record(record: Mapping[str, Any]) -> None:
     """Raise ValueError if a candidate descriptor is malformed."""
+    _require_formal_version()
     if record.get("schema_version") != 1 or record.get("repository") != REPOSITORY:
         raise ValueError("candidate record schema or repository is invalid")
     _full_sha(record.get("candidate_sha"), name="candidate_sha")
@@ -502,8 +508,23 @@ def validate_release_texts(
 ) -> list[str]:
     """Return release metadata and workflow policy errors."""
     errors: list[str] = []
+    try:
+        release_version = workflow_release_version(release_workflow)
+    except ValueError as exc:
+        return [str(exc)]
+    metadata = _PROJECT_VERSION.search(pyproject)
+    source_version = metadata.group(1) if metadata is not None else ""
+    if (
+        re.fullmatch(rf"{_TWO_COMPONENT_VERSION.pattern}(?:\.dev0)?", source_version)
+        is None
+    ):
+        errors.append(
+            "project metadata must use canonical major.minor or major.minor.dev0"
+        )
+    elif not source_version.endswith(".dev0") and source_version != release_version:
+        errors.append("formal package metadata must match the release workflow version")
+    release_tag = f"v{release_version}"
     pyproject_fragments = (
-        f'version = "{VERSION}"',
         'license = "Apache-2.0"',
         'license-files = ["LICENSE"]',
         '"Typing :: Typed"',
@@ -524,7 +545,7 @@ def validate_release_texts(
     ):
         if re.search(r"\balpha\b", text, re.IGNORECASE):
             errors.append(f"current {label} must not contain an Alpha marker")
-    if f"# ray-clickhouse {VERSION}\n" not in release_notes:
+    if f"# ray-clickhouse {release_version}\n" not in release_notes:
         errors.append("release notes must identify the current project version")
     for phrase in ("not yet published", "release candidate"):
         if phrase in release_notes.lower():
@@ -575,7 +596,7 @@ def validate_release_texts(
         "predecessor_receipt_artifact_digest:",
         "--predecessor-run-id",
         "--expected-run-id",
-        f"--expected-version {VERSION}",
+        f"--expected-version {release_version}",
         "environment: release-tag",
         "environment: testpypi",
         "environment: pypi",
@@ -589,9 +610,9 @@ def validate_release_texts(
         '--source-digest "${CANDIDATE_SHA}"',
         "--source-ref refs/heads/master",
         "--no-deps",
-        f"refs/tags/{TAG}^{{}}",
-        f"https://pypi.org/pypi/ray-clickhouse/{VERSION}/json",
-        f"https://test.pypi.org/pypi/ray-clickhouse/{VERSION}/json",
+        f"refs/tags/{release_tag}^{{}}",
+        f"https://pypi.org/pypi/ray-clickhouse/{release_version}/json",
+        f"https://test.pypi.org/pypi/ray-clickhouse/{release_version}/json",
         "promotion-receipt.json",
         "Record promotion receipt identity",
         "RECEIPT_DIGEST: sha256:${{ steps.upload-receipt.outputs.artifact-digest }}",
@@ -646,6 +667,10 @@ def validate_release_texts(
 
     ci_fragments = (
         "candidate-record:",
+        "needs.candidate.outputs.formal == 'true'",
+        "ci-version --github-output",
+        "PACKAGE_VERSION: ${{ needs.candidate.outputs.version }}",
+        "assert version('ray-clickhouse') == os.environ['PACKAGE_VERSION']",
         "needs: [candidate, unit, quality, docs, docs-linkcheck, "
         "clickhouse-it, ray-cluster-it, package-build, package-smoke]",
         "SHA256SUMS",
@@ -727,13 +752,32 @@ def validate_release_texts(
     return errors
 
 
+def workflow_release_version(workflow: str) -> str:
+    """Read the explicitly selected formal identity from the release workflow."""
+    versions: list[str] = re.findall(r"--expected-version ([^\s]+)", workflow)
+    if len(versions) != 1 or _TWO_COMPONENT_VERSION.fullmatch(versions[0]) is None:
+        raise ValueError(
+            "release workflow must select one canonical --expected-version"
+        )
+    return versions[0]
+
+
+def _require_formal_version() -> None:
+    if _TWO_COMPONENT_VERSION.fullmatch(VERSION) is None:
+        raise ValueError(
+            "development versions cannot produce or promote formal releases"
+        )
+
+
 def run_checks(root: Path = REPOSITORY_ROOT) -> list[str]:
     """Read repository release inputs and return policy errors."""
+    workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    release_version = workflow_release_version(workflow)
     return validate_release_texts(
         (root / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
-        (root / ".github/workflows/release.yml").read_text(encoding="utf-8"),
+        workflow,
         (root / "pyproject.toml").read_text(encoding="utf-8"),
-        (root / f"release-notes/v{VERSION}.md").read_text(encoding="utf-8"),
+        (root / f"release-notes/v{release_version}.md").read_text(encoding="utf-8"),
     )
 
 
@@ -754,6 +798,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("check")
+    ci_version = subparsers.add_parser("ci-version")
+    ci_version.add_argument("--github-output", type=Path, required=True)
 
     candidate = subparsers.add_parser("create-candidate-record")
     candidate.add_argument("--output", type=Path, required=True)
@@ -821,6 +867,13 @@ def _parser() -> argparse.ArgumentParser:
 def _run_command(args: argparse.Namespace) -> list[str]:
     if args.command == "check":
         return run_checks()
+    if args.command == "ci-version":
+        formal = "true" if _TWO_COMPONENT_VERSION.fullmatch(VERSION) else "false"
+        with args.github_output.open("a", encoding="utf-8") as stream:
+            stream.write(f"version={VERSION}\nformal={formal}\n")
+        return []
+    if args.command != "verify-clickhouse-evidence":
+        _require_formal_version()
     if args.command == "create-candidate-record":
         created_candidate = create_candidate_record(
             candidate_sha=args.candidate_sha,

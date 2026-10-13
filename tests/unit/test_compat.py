@@ -19,6 +19,8 @@ from ray_clickhouse._errors import ConfigurationError
         "2.58.0",
         "2.58.0+local.1",
         "2.58.0+vendor-build_2",
+        "2.59.0",
+        "2.59.0+vendor.1",
     ),
 )
 def test_supported_final_ray_versions(
@@ -32,7 +34,7 @@ def test_supported_final_ray_versions(
     "version",
     (
         "2.54.9",
-        "2.59.0",
+        "2.60.0",
         "2.58.0rc1",
         "2.58.0.dev0",
         "2.58.0.post1",
@@ -44,7 +46,7 @@ def test_unsupported_ray_versions_fail_closed(
     monkeypatch: pytest.MonkeyPatch, version: str
 ) -> None:
     monkeypatch.setattr(_compat, "_RAY_VERSION", version)
-    with pytest.raises(ConfigurationError, match=r">=2\.55,<2\.59"):
+    with pytest.raises(ConfigurationError, match=r">=2\.55,<2\.60"):
         _compat.ensure_supported_ray_version()
 
 

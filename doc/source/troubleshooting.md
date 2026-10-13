@@ -2,7 +2,7 @@
 
 ## Unsupported Ray version
 
-Install a final Ray release in `>=2.55,<2.59`. Prerelease, development, and post-release builds are intentionally rejected.
+Install a final Ray release in `>=2.55,<2.60`. Prerelease, development, and post-release builds are intentionally rejected.
 
 ## Authentication and permission errors
 

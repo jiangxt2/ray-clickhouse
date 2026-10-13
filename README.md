@@ -4,7 +4,9 @@ Ray Data read and append connector for ClickHouse physical tables.
 
 > [!IMPORTANT]
 > `ray-clickhouse` is community-maintained and is not an official Ray or ClickHouse project.
-> Version `1.0` follows the two-component `major.minor` release route.
+> Development checkouts on `master` declare `1.1.dev0`; the latest published release is
+> `1.0`. Formal releases follow the two-component `major.minor` route. The development
+> version does not select the next formal release version.
 
 This release provides:
 
@@ -164,7 +166,7 @@ zero-valued success. MaterializedView reads are not part of the supported capabi
 
 ## Compatibility
 
-`ray-clickhouse` supports final Ray releases `>=2.55,<2.59` on Python 3.10–3.13.
+`ray-clickhouse` supports final Ray releases `>=2.55,<2.60` on Python 3.10–3.13.
 Prerelease, development, and post-release Ray builds are rejected. PEP 440 local build
 suffixes are allowed. Pandas is resolved through `ray[data]`; it is not an independent
 `ray-clickhouse` compatibility promise.
@@ -174,10 +176,11 @@ suffixes are allowed. Pandas is resolved through `ray[data]`; it is not an indep
 | 3.12 | 2.55.0 | Unit and public-contract tests |
 | 3.12 | 2.56.1 | Unit and public-contract tests |
 | 3.12 | 2.57.0 | Unit and public-contract tests |
-| 3.12 | 2.58.0 | Unit, public-contract, and package tests |
-| 3.10 | 2.58.0 | Unit, public-contract, and wheel tests |
-| 3.11 | 2.58.0 | Unit, public-contract, and wheel tests |
-| 3.13 | 2.58.0 | Unit, public-contract, and wheel tests |
+| 3.12 | 2.58.0 | Unit and public-contract tests for the previous minor |
+| 3.12 | 2.59.0 | Unit, public-contract, and package tests |
+| 3.10 | 2.59.0 | Unit, public-contract, and wheel tests |
+| 3.11 | 2.59.0 | Unit, public-contract, and wheel tests |
+| 3.13 | 2.59.0 | Unit, public-contract, and wheel tests |
 
 ## Development
 
@@ -202,5 +205,5 @@ make -C doc linkcheck
 
 ClickHouse and multi-node Ray integration commands remain available in the repository,
 but they are required only when the affected production or infrastructure behavior changes.
-The pinned infrastructure baselines are ClickHouse 26.8.1.2041 and a Ray 2.58.0/Python 3.12
+The pinned infrastructure baselines are ClickHouse 26.8.1.2041 and a Ray 2.59.0/Python 3.12
 three-node runtime.

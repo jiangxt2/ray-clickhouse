@@ -25,6 +25,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
+      version: ${{ steps.version.outputs.version }}
+      formal: ${{ steps.version.outputs.formal }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,6 +53,9 @@ jobs:
           set -euo pipefail
           git checkout --detach "${CANDIDATE_SHA}"
           test "$(git rev-parse HEAD)" = "${CANDIDATE_SHA}"
+      - name: Read package version
+        id: version
+        run: python3 tools/check_release.py ci-version --github-output "${GITHUB_OUTPUT}"
 
   unit:
     name: Python ${{ matrix.python }} / Ray ${{ matrix.ray }}
@@ -69,12 +74,14 @@ jobs:
             ray: "2.57.0"
           - python: "3.12"
             ray: "2.58.0"
+          - python: "3.12"
+            ray: "2.59.0"
           - python: "3.10"
-            ray: "2.58.0"
+            ray: "2.59.0"
           - python: "3.11"
-            ray: "2.58.0"
+            ray: "2.59.0"
           - python: "3.13"
-            ray: "2.58.0"
+            ray: "2.59.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -189,7 +196,7 @@ jobs:
           retention-days: 90
 
   ray-cluster-it:
-    name: Ray 2.58 multi-node integration
+    name: Ray 2.59 multi-node integration
     needs: candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -206,7 +213,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ray-2.58-cluster-integration
+          name: ray-2.59-cluster-integration
           path: artifacts/it/ray-cluster
           if-no-files-found: error
           retention-days: 90
@@ -248,6 +255,8 @@ jobs:
     needs: [candidate, package-build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      PACKAGE_VERSION: ${{ needs.candidate.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -277,11 +286,11 @@ jobs:
           test "${#packages[@]}" -eq 1
           uv pip install \
             --python .venv-wheel/bin/python \
-            "ray[data]==2.58.0" \
+            "ray[data]==2.59.0" \
             "${packages[0]}"
           uv pip check --python .venv-wheel/bin/python
           .venv-wheel/bin/python -c \
-            "from importlib.metadata import distribution, version; import clickhouse_connect, pyarrow, ray, ray_clickhouse; d = distribution('ray-clickhouse'); assert version('ray-clickhouse') == '1.0'; assert d.locate_file('ray_clickhouse/py.typed').is_file(); assert d.metadata['License-Expression'] == 'Apache-2.0'; assert d.metadata['Description-Content-Type'] == 'text/markdown'; assert 'Typing :: Typed' in d.metadata.get_all('Classifier'); print(ray.__version__)"
+            "from importlib.metadata import distribution, version; import os; import clickhouse_connect, pyarrow, ray, ray_clickhouse; d = distribution('ray-clickhouse'); assert version('ray-clickhouse') == os.environ['PACKAGE_VERSION']; assert d.locate_file('ray_clickhouse/py.typed').is_file(); assert d.metadata['License-Expression'] == 'Apache-2.0'; assert d.metadata['Description-Content-Type'] == 'text/markdown'; assert 'Typing :: Typed' in d.metadata.get_all('Classifier'); print(ray.__version__)"
       - name: Install and check source distribution
         if: matrix.python == '3.12'
         run: |
@@ -291,11 +300,11 @@ jobs:
           uv venv --python 3.12 .venv-sdist
           uv pip install \
             --python .venv-sdist/bin/python \
-            "ray[data]==2.58.0" \
+            "ray[data]==2.59.0" \
             "${packages[0]}"
           uv pip check --python .venv-sdist/bin/python
           .venv-sdist/bin/python -c \
-            "from importlib.metadata import distribution, version; import clickhouse_connect, pyarrow, ray, ray_clickhouse; d = distribution('ray-clickhouse'); assert version('ray-clickhouse') == '1.0'; assert d.locate_file('ray_clickhouse/py.typed').is_file(); assert d.metadata['License-Expression'] == 'Apache-2.0'; assert d.metadata['Description-Content-Type'] == 'text/markdown'; assert 'Typing :: Typed' in d.metadata.get_all('Classifier'); print(ray.__version__)"
+            "from importlib.metadata import distribution, version; import os; import clickhouse_connect, pyarrow, ray, ray_clickhouse; d = distribution('ray-clickhouse'); assert version('ray-clickhouse') == os.environ['PACKAGE_VERSION']; assert d.locate_file('ray_clickhouse/py.typed').is_file(); assert d.metadata['License-Expression'] == 'Apache-2.0'; assert d.metadata['Description-Content-Type'] == 'text/markdown'; assert 'Typing :: Typed' in d.metadata.get_all('Classifier'); print(ray.__version__)"
 
   candidate-record:
     name: Record release candidate
@@ -303,7 +312,8 @@ jobs:
       github.event_name == 'push' &&
       github.ref == 'refs/heads/master' &&
       github.workflow_ref ==
-      'jiangxt2/ray-clickhouse/.github/workflows/ci.yml@refs/heads/master'
+      'jiangxt2/ray-clickhouse/.github/workflows/ci.yml@refs/heads/master' &&
+      needs.candidate.outputs.formal == 'true'
     needs: [candidate, unit, quality, docs, docs-linkcheck, clickhouse-it, ray-cluster-it, package-build, package-smoke]
     runs-on: ubuntu-24.04
     timeout-minutes: 10

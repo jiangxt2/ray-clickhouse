@@ -1,6 +1,6 @@
 [project]
 name = "ray-clickhouse"
-version = "1.0"
+version = "1.1.dev0"
 description = "Ray Data read and append connector for ClickHouse physical tables"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
@@ -18,7 +18,7 @@ classifiers = [
 dependencies = [
     "clickhouse-connect[arrow]>=1.5,<1.6",
     "pyarrow>=19,<20",
-    "ray[data]>=2.55,<2.59",
+    "ray[data]>=2.55,<2.60",
     "typing-extensions>=4.12,<5",
 ]
 
@@ -55,6 +55,7 @@ build-backend = "hatchling.build"
 packages = ["src/ray_clickhouse"]
 
 [tool.pytest.ini_options]
+pythonpath = ["tests"]
 testpaths = ["tests"]
 addopts = "-q"
 markers = [

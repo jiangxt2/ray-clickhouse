@@ -15,7 +15,7 @@ from ray.data.datasource import ReadTask
 from ray_clickhouse._errors import ConfigurationError
 
 _MIN_RAY = (2, 55, 0)
-_MAX_RAY = (2, 59, 0)
+_MAX_RAY = (2, 60, 0)
 _RAY_VERSION = ray.__version__
 _FINAL = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\+[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*)?$")
 
@@ -26,7 +26,7 @@ def ensure_supported_ray_version() -> None:
     version = tuple(int(part) for part in match.groups()) if match is not None else ()
     if not _MIN_RAY <= version < _MAX_RAY:
         raise ConfigurationError(
-            "ray-clickhouse supports final Ray releases >=2.55,<2.59; "
+            "ray-clickhouse supports final Ray releases >=2.55,<2.60; "
             "PEP 440 local build suffixes are allowed, but prerelease, dev, and "
             f"post-release builds are unsupported; found Ray {_RAY_VERSION!r}"
         )
@@ -43,7 +43,7 @@ def make_read_task(
     if "schema" not in parameters:
         raise ConfigurationError(
             "installed Ray ReadTask lacks required schema support within the final "
-            "Ray >=2.55,<2.59 compatibility window"
+            "Ray >=2.55,<2.60 compatibility window"
         )
     kwargs: dict[str, Any] = {
         "read_fn": read_fn,

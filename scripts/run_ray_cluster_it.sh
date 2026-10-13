@@ -4,8 +4,8 @@ set -Eeuo pipefail
 project_name="ray-clickhouse-cluster-it"
 compose_file="docker/ray/compose.yaml"
 artifact_dir="${RAY_CLICKHOUSE_CLUSTER_IT_ARTIFACT_DIR:-.artifacts/it/ray-cluster}"
-ray_base_source="${RAY_CLICKHOUSE_RAY_BASE_SOURCE:-docker.m.daocloud.io/rayproject/ray@sha256:c3c9573c5c6bfe4127885f79622d6a32064d34cafc7d156ec728aab8657be250}"
-ray_base_local="${RAY_CLICKHOUSE_RAY_BASE_LOCAL_IMAGE:-ray-clickhouse-ray-base:2.58.0-py312-c3c9573c5c6b}"
+ray_base_source="${RAY_CLICKHOUSE_RAY_BASE_SOURCE:-docker.m.daocloud.io/rayproject/ray@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5}"
+ray_base_local="${RAY_CLICKHOUSE_RAY_BASE_LOCAL_IMAGE:-ray-clickhouse-ray-base:2.59.0-py312-0ffca209fb4c}"
 runtime_image="${RAY_CLICKHOUSE_CLUSTER_RUNTIME_IMAGE:-ray-clickhouse-cluster-it-runtime:run-$$}"
 
 mkdir -p "$artifact_dir"

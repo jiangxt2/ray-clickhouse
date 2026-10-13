@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
+from tools import check_release
 from tools.check_release import (
     OPERATIONS,
     PREDECESSOR,
@@ -32,6 +35,26 @@ WHEEL = "ray_clickhouse-1.0-py3-none-any.whl"
 SDIST = "ray_clickhouse-1.0.tar.gz"
 FILES = {WHEEL: "c" * 64, SDIST: "d" * 64}
 FILE_SIZES = {WHEEL: 100, SDIST: 200}
+
+
+@pytest.fixture(autouse=True)
+def formal_release_context(monkeypatch) -> None:
+    """Exercise the existing promotion contracts against a selected formal snapshot."""
+    monkeypatch.setattr(check_release, "VERSION", "1.0")
+    monkeypatch.setattr(check_release, "TAG", "v1.0")
+    monkeypatch.setattr(
+        check_release,
+        "_WHEEL",
+        re.compile(r"^ray_clickhouse-1\.0-[A-Za-z0-9_.-]+\.whl$"),
+    )
+    monkeypatch.setattr(
+        check_release,
+        "_INDEX_URLS",
+        {
+            "https://pypi.org/pypi/ray-clickhouse/1.0/json",
+            "https://test.pypi.org/pypi/ray-clickhouse/1.0/json",
+        },
+    )
 
 
 def _repository_texts() -> tuple[str, str, str, str]:
@@ -123,14 +146,22 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value) + "\n", encoding="utf-8")
 
 
-def _release_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(REPOSITORY_ROOT / "tools/check_release.py"), *arguments],
-        cwd=REPOSITORY_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+def _release_cli(
+    *arguments: str, version: str = "1.0"
+) -> subprocess.CompletedProcess[str]:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        (root / "tools").mkdir()
+        script = root / "tools/check_release.py"
+        script.write_bytes((REPOSITORY_ROOT / "tools/check_release.py").read_bytes())
+        (root / "pyproject.toml").write_text(f'version = "{version}"\n')
+        return subprocess.run(
+            [sys.executable, str(script), *arguments],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
 
 
 def test_repository_release_contracts_match() -> None:
@@ -194,6 +225,100 @@ def test_formal_version_requires_static_metadata(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="static project version"):
         project_version(metadata)
+
+
+def test_development_metadata_requires_explicit_permission(tmp_path: Path) -> None:
+    metadata = tmp_path / "pyproject.toml"
+    metadata.write_text('version = "1.1.dev0"\n')
+    with pytest.raises(ValueError, match="major.minor"):
+        project_version(metadata)
+    assert project_version(metadata, allow_development=True) == "1.1.dev0"
+
+
+def test_development_source_passes_static_policy() -> None:
+    assert run_checks() == []
+
+
+def test_development_source_cannot_create_candidate(monkeypatch) -> None:
+    monkeypatch.setattr(check_release, "VERSION", "1.1.dev0")
+    with pytest.raises(ValueError, match="development versions cannot"):
+        _candidate()
+
+
+def test_development_cli_emits_full_ci_version(tmp_path: Path) -> None:
+    output = tmp_path / "github-output"
+    result = _release_cli(
+        "ci-version", "--github-output", str(output), version="1.1.dev0"
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.read_text() == "version=1.1.dev0\nformal=false\n"
+
+
+def test_formal_cli_emits_release_candidate_permission(tmp_path: Path) -> None:
+    output = tmp_path / "github-output"
+    result = _release_cli("ci-version", "--github-output", str(output))
+    assert result.returncode == 0, result.stderr
+    assert output.read_text() == "version=1.0\nformal=true\n"
+
+
+@pytest.mark.parametrize("version", ["1.1rc1", "1.1.dev1", "1.1.0.dev0", "01.1.dev0"])
+def test_development_permission_rejects_other_version_forms(
+    tmp_path: Path, version: str
+) -> None:
+    metadata = tmp_path / "pyproject.toml"
+    metadata.write_text(f'version = "{version}"\n')
+    with pytest.raises(ValueError, match="major.minor"):
+        project_version(metadata, allow_development=True)
+
+
+def test_development_ci_cannot_enable_formal_candidate_recording() -> None:
+    sources = list(_repository_texts())
+    sources[0] = sources[0].replace("needs.candidate.outputs.formal == 'true'", "true")
+    assert any("formal" in error for error in validate_release_texts(*sources))
+
+
+@pytest.mark.parametrize(
+    ("version", "message"),
+    [
+        ("1.1", "formal package metadata must match"),
+        ("1.1.dev1", "canonical major.minor"),
+    ],
+)
+def test_static_policy_preserves_formal_identity_and_development_format(
+    version: str, message: str
+) -> None:
+    sources = list(_repository_texts())
+    if version == check_release.workflow_release_version(sources[1]):
+        version = "1.0"
+    sources[2], replacements = re.subn(
+        r'(?m)^version = "[^"]+"$',
+        f'version = "{version}"',
+        sources[2],
+        count=1,
+    )
+    assert replacements == 1
+    assert any(message in error for error in validate_release_texts(*sources))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "create-candidate-record",
+        "verify-candidate-record",
+        "create-promotion-receipt",
+        "verify-promotion-receipt",
+        "verify-index",
+        "record-github-release-state",
+    ],
+)
+def test_development_commands_stop_before_side_effects(
+    monkeypatch, command: str
+) -> None:
+    import argparse
+
+    monkeypatch.setattr(check_release, "VERSION", "1.1.dev0")
+    with pytest.raises(ValueError, match="development versions cannot"):
+        check_release._run_command(argparse.Namespace(command=command))
 
 
 def test_sha256sums_requires_one_wheel_and_one_source_archive() -> None:

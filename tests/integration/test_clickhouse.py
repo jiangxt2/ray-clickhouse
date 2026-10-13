@@ -8,9 +8,12 @@ from typing import Any
 import pyarrow as pa
 import pytest
 import ray.data
+from cluster_write_fault import LostAckDataSink, WriteEvents
 
 from ray_clickhouse import read_clickhouse, write_clickhouse
+from ray_clickhouse._compat import prepare_write_remote_args
 from ray_clickhouse._errors import (
+    AmbiguousWriteError,
     DiscoveryError,
     PermissionError,
     ReadError,
@@ -18,7 +21,12 @@ from ray_clickhouse._errors import (
     TransportError,
     WriteError,
 )
-from ray_clickhouse._models import ClickHouseConnection, QuerySpec, ResourceLimits
+from ray_clickhouse._models import (
+    ClickHouseConnection,
+    QualifiedTable,
+    QuerySpec,
+    ResourceLimits,
+)
 from ray_clickhouse._transport import _discover_query_log_table, stream_query
 
 from .conftest import DATABASE
@@ -40,6 +48,52 @@ def _create_events_table(client: Any, table: str) -> None:
         ORDER BY (tenant_id, id)
         """
     )
+
+
+@pytest.mark.integration
+@pytest.mark.ray
+@pytest.mark.cluster
+@pytest.mark.parametrize("insert_mode", ["sync", "async"])
+def test_post_send_failure_is_ambiguous_without_ray_replay(
+    clickhouse_client: Any,
+    table_name: str,
+    connection_options: dict[str, object],
+    insert_mode: str,
+) -> None:
+    clickhouse_client.command(
+        f"CREATE TABLE `{DATABASE}`.`{table_name}` (id UInt64) "
+        "ENGINE = MergeTree ORDER BY id"
+    )
+    events = WriteEvents.remote()
+    sink = LostAckDataSink(
+        events=events,
+        connection=ClickHouseConnection(**connection_options),
+        table=QualifiedTable(DATABASE, table_name),
+        insert_mode=insert_mode,
+    )
+    try:
+        dataset = ray.data.from_arrow(pa.table({"id": pa.array([1], type=pa.uint64())}))
+        with pytest.raises(Exception) as captured:
+            dataset.write_datasink(
+                sink,
+                concurrency=1,
+                ray_remote_args=prepare_write_remote_args({"num_cpus": 1}),
+            )
+        cause = captured.value
+        if hasattr(cause, "as_instanceof_cause"):
+            cause = cause.as_instanceof_cause()
+        assert isinstance(cause, AmbiguousWriteError)
+        assert sink.receipt is None
+        assert ray.get(events.snapshot.remote()) == {
+            "attempts": 1,
+            "committed_batches": 1,
+            "closed_clients": 1,
+        }
+        assert clickhouse_client.query(
+            f"SELECT count() FROM `{DATABASE}`.`{table_name}`"
+        ).result_rows == [(1,)]
+    finally:
+        ray.kill(events)
 
 
 def _events_table(start: int, count: int, *, tenant_count: int = 3) -> pa.Table:
