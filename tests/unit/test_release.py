@@ -146,13 +146,15 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value) + "\n", encoding="utf-8")
 
 
-def _release_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
+def _release_cli(
+    *arguments: str, version: str = "1.0"
+) -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         (root / "tools").mkdir()
         script = root / "tools/check_release.py"
         script.write_bytes((REPOSITORY_ROOT / "tools/check_release.py").read_bytes())
-        (root / "pyproject.toml").write_text('version = "1.0"\n')
+        (root / "pyproject.toml").write_text(f'version = "{version}"\n')
         return subprocess.run(
             [sys.executable, str(script), *arguments],
             cwd=root,
@@ -245,17 +247,8 @@ def test_development_source_cannot_create_candidate(monkeypatch) -> None:
 
 def test_development_cli_emits_full_ci_version(tmp_path: Path) -> None:
     output = tmp_path / "github-output"
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(REPOSITORY_ROOT / "tools/check_release.py"),
-            "ci-version",
-            "--github-output",
-            str(output),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    result = _release_cli(
+        "ci-version", "--github-output", str(output), version="1.1.dev0"
     )
     assert result.returncode == 0, result.stderr
     assert output.read_text() == "version=1.1.dev0\nformal=false\n"
@@ -295,7 +288,15 @@ def test_static_policy_preserves_formal_identity_and_development_format(
     version: str, message: str
 ) -> None:
     sources = list(_repository_texts())
-    sources[2] = sources[2].replace('version = "1.1.dev0"', f'version = "{version}"')
+    if version == check_release.workflow_release_version(sources[1]):
+        version = "1.0"
+    sources[2], replacements = re.subn(
+        r'(?m)^version = "[^"]+"$',
+        f'version = "{version}"',
+        sources[2],
+        count=1,
+    )
+    assert replacements == 1
     assert any(message in error for error in validate_release_texts(*sources))
 
 

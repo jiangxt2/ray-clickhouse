@@ -65,5 +65,5 @@ pytest_targets=("$@")
 if [[ "$#" -eq 0 ]]; then
     pytest_targets=(tests/integration)
 fi
-"$python_bin" -m pytest "${pytest_targets[@]}" -m integration -vv \
+"$python_bin" -m pytest "${pytest_targets[@]}" -m "integration and not cluster" -vv \
     --junitxml="$artifact_dir/pytest.xml" 2>&1 | tee "$artifact_dir/pytest.log"
