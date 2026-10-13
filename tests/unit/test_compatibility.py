@@ -54,15 +54,15 @@ def test_repository_compatibility_contracts_match() -> None:
             "actions/checkout@v7",
             "full SHA",
         ),
-        (1, "| 3.11 | 2.58.0 |", "| 3.14 | 2.58.0 |", "README matrix"),
-        (2, '"ray[data]>=2.55,<2.59"', '"ray[data]>=2.55,<2.60"', "Ray dependency"),
+        (1, "| 3.11 | 2.59.0 |", "| 3.14 | 2.59.0 |", "README matrix"),
+        (2, '"ray[data]>=2.55,<2.60"', '"ray[data]>=2.55,<2.61"', "Ray dependency"),
         (
             2,
             '"Programming Language :: Python :: 3.13"',
             '"Programming Language :: Python :: 3.14"',
             "Python classifiers",
         ),
-        (3, "_MAX_RAY = (2, 59, 0)", "_MAX_RAY = (2, 60, 0)", "maximum Ray version"),
+        (3, "_MAX_RAY = (2, 60, 0)", "_MAX_RAY = (2, 61, 0)", "maximum Ray version"),
     ),
 )
 def test_compatibility_checker_rejects_drift(

@@ -5,13 +5,13 @@
 | Component | Supported range |
 | --- | --- |
 | Python | `>=3.10,<3.14` |
-| Ray | Final releases `>=2.55,<2.59` |
+| Ray | Final releases `>=2.55,<2.60` |
 | PyArrow | `>=19,<20` |
 | clickhouse-connect | `>=1.5,<1.6` with Arrow support |
 
 Prerelease, development, and post-release Ray builds are rejected. PEP 440 local Ray build suffixes are accepted. Pandas is resolved through `ray[data]` and is not an independent compatibility promise.
 
-The primary current baseline is Python 3.12, Ray 2.58.0, PyArrow 19, and ClickHouse 26.8.1.2041. Python 3.10–3.13 and Ray 2.55.0, 2.56.1, 2.57.0, and 2.58.0 are covered by the repository CI matrix.
+The primary current baseline is Python 3.12, Ray 2.59.0, PyArrow 19, and ClickHouse 26.8.1.2041. Python 3.10–3.13 and Ray 2.55.0, 2.56.1, 2.57.0, 2.58.0, and 2.59.0 are covered by the repository CI matrix.
 
 ## Public compatibility contract
 

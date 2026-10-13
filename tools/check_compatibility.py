@@ -14,13 +14,14 @@ EXPECTED_MATRIX = (
     ("3.12", "2.56.1"),
     ("3.12", "2.57.0"),
     ("3.12", "2.58.0"),
-    ("3.10", "2.58.0"),
-    ("3.11", "2.58.0"),
-    ("3.13", "2.58.0"),
+    ("3.12", "2.59.0"),
+    ("3.10", "2.59.0"),
+    ("3.11", "2.59.0"),
+    ("3.13", "2.59.0"),
 )
 EXPECTED_PACKAGE_PYTHONS = ("3.10", "3.11", "3.12", "3.13")
 EXPECTED_PYTHON_RANGE = ">=3.10,<3.14"
-EXPECTED_RAY_RANGE = ">=2.55,<2.59"
+EXPECTED_RAY_RANGE = ">=2.55,<2.60"
 
 _JOB_PATTERN_TEMPLATE = r"(?ms)^  {job}:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)"
 _STEP_PATTERN_TEMPLATE = (
@@ -141,8 +142,8 @@ def validate_compatibility_texts(
         errors.append(f"README Python range must be {EXPECTED_PYTHON_RANGE}")
     if "_MIN_RAY = (2, 55, 0)" not in compatibility_module:
         errors.append("compatibility module minimum Ray version must be 2.55.0")
-    if "_MAX_RAY = (2, 59, 0)" not in compatibility_module:
-        errors.append("compatibility module maximum Ray version must be 2.59.0")
+    if "_MAX_RAY = (2, 60, 0)" not in compatibility_module:
+        errors.append("compatibility module maximum Ray version must be 2.60.0")
 
     required_workflow_fragments = (
         "workflow_call:",

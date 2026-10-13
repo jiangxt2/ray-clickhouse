@@ -1,4 +1,4 @@
-ARG RAY_BASE_IMAGE=ray-clickhouse-ray-base:2.58.0-py312-c3c9573c5c6b
+ARG RAY_BASE_IMAGE=ray-clickhouse-ray-base:2.59.0-py312-0ffca209fb4c
 FROM ${RAY_BASE_IMAGE}
 
 WORKDIR /workspace/ray-clickhouse
