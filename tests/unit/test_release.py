@@ -26,13 +26,15 @@ from tools.check_release import (
     validate_release_texts,
     verify_clickhouse_evidence,
     verify_files,
+    workflow_release_version,
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SHA = "a" * 40
 DIGEST = "sha256:" + "b" * 64
-WHEEL = "ray_clickhouse-1.0-py3-none-any.whl"
-SDIST = "ray_clickhouse-1.0.tar.gz"
+RELEASE_VERSION = "1.1"
+WHEEL = f"ray_clickhouse-{RELEASE_VERSION}-py3-none-any.whl"
+SDIST = f"ray_clickhouse-{RELEASE_VERSION}.tar.gz"
 FILES = {WHEEL: "c" * 64, SDIST: "d" * 64}
 FILE_SIZES = {WHEEL: 100, SDIST: 200}
 
@@ -40,19 +42,21 @@ FILE_SIZES = {WHEEL: 100, SDIST: 200}
 @pytest.fixture(autouse=True)
 def formal_release_context(monkeypatch) -> None:
     """Exercise the existing promotion contracts against a selected formal snapshot."""
-    monkeypatch.setattr(check_release, "VERSION", "1.0")
-    monkeypatch.setattr(check_release, "TAG", "v1.0")
+    monkeypatch.setattr(check_release, "VERSION", RELEASE_VERSION)
+    monkeypatch.setattr(check_release, "TAG", f"v{RELEASE_VERSION}")
     monkeypatch.setattr(
         check_release,
         "_WHEEL",
-        re.compile(r"^ray_clickhouse-1\.0-[A-Za-z0-9_.-]+\.whl$"),
+        re.compile(
+            rf"^ray_clickhouse-{re.escape(RELEASE_VERSION)}-[A-Za-z0-9_.-]+\.whl$"
+        ),
     )
     monkeypatch.setattr(
         check_release,
         "_INDEX_URLS",
         {
-            "https://pypi.org/pypi/ray-clickhouse/1.0/json",
-            "https://test.pypi.org/pypi/ray-clickhouse/1.0/json",
+            f"https://pypi.org/pypi/ray-clickhouse/{RELEASE_VERSION}/json",
+            f"https://test.pypi.org/pypi/ray-clickhouse/{RELEASE_VERSION}/json",
         },
     )
 
@@ -62,7 +66,9 @@ def _repository_texts() -> tuple[str, str, str, str]:
         (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
         (REPOSITORY_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"),
         (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8"),
-        (REPOSITORY_ROOT / "release-notes/v1.0.md").read_text(encoding="utf-8"),
+        (REPOSITORY_ROOT / f"release-notes/v{RELEASE_VERSION}.md").read_text(
+            encoding="utf-8"
+        ),
     )
 
 
@@ -93,21 +99,21 @@ def _external_state(operation: str) -> dict[str, object]:
         host = "test.pypi.org" if operation == "testpypi" else "pypi.org"
         return {
             "operation": operation,
-            "index_url": f"https://{host}/pypi/ray-clickhouse/1.0/json",
+            "index_url": f"https://{host}/pypi/ray-clickhouse/{RELEASE_VERSION}/json",
             "project": "ray-clickhouse",
-            "version": "1.0",
+            "version": RELEASE_VERSION,
             "files": FILES,
         }
     if operation == "release-tag":
         return {
             "operation": operation,
-            "tag": "v1.0",
+            "tag": f"v{RELEASE_VERSION}",
             "tag_type": "annotated",
             "target": SHA,
         }
     return {
         "operation": operation,
-        "tag": "v1.0",
+        "tag": f"v{RELEASE_VERSION}",
         "target": SHA,
         "assets": {**FILES, "SHA256SUMS": "e" * 64},
     }
@@ -147,7 +153,7 @@ def _write_json(path: Path, value: object) -> None:
 
 
 def _release_cli(
-    *arguments: str, version: str = "1.0"
+    *arguments: str, version: str = RELEASE_VERSION
 ) -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -169,7 +175,8 @@ def test_repository_release_contracts_match() -> None:
 
 
 @pytest.mark.parametrize(
-    ("expected_version", "returncode"), (("1.0", 0), ("0.1.0", 1), ("1.1", 1))
+    ("expected_version", "returncode"),
+    (("1.1", 0), ("0.1.0", 1), ("1.0", 1)),
 )
 def test_candidate_cli_requires_requested_release_version(
     expected_version: str, returncode: int, tmp_path: Path
@@ -235,8 +242,57 @@ def test_development_metadata_requires_explicit_permission(tmp_path: Path) -> No
     assert project_version(metadata, allow_development=True) == "1.1.dev0"
 
 
-def test_development_source_passes_static_policy() -> None:
+def test_formal_candidate_passes_static_policy() -> None:
     assert run_checks() == []
+
+
+def test_release_version_is_derived_from_candidate_metadata() -> None:
+    _, workflow, _, _ = _repository_texts()
+
+    assert workflow_release_version(workflow, "1.1") == "1.1"
+    assert workflow_release_version(workflow, "1.2.dev0") == "1.2"
+    assert workflow_release_version(workflow, "1.0") == "1.0"
+    assert "v1.0" not in workflow
+    assert (REPOSITORY_ROOT / "release-notes/v1.0.md").is_file()
+
+
+def test_release_workflow_rejects_a_static_version() -> None:
+    _, workflow, _, _ = _repository_texts()
+    static_workflow = workflow.replace(
+        "release-version: ${{ steps.candidate-version.outputs.release-version }}",
+        "release-version: 1.1",
+        1,
+    )
+
+    with pytest.raises(ValueError, match="candidate-derived version"):
+        workflow_release_version(static_workflow, "1.1")
+
+
+def test_release_workflow_rejects_a_static_candidate_metadata_assignment() -> None:
+    _, workflow, _, _ = _repository_texts()
+    assignment = next(
+        line
+        for line in workflow.splitlines()
+        if line.strip().startswith("RELEASE_VERSION=$(python3 -c")
+    )
+    static_workflow = workflow.replace(assignment, "          RELEASE_VERSION=1.1", 1)
+
+    with pytest.raises(
+        ValueError, match="derive its version from candidate package metadata"
+    ):
+        workflow_release_version(static_workflow, "1.1")
+
+
+def test_release_workflow_rejects_a_hardcoded_testpypi_promotion_version() -> None:
+    _, workflow, _, _ = _repository_texts()
+    static_workflow = workflow.replace(
+        "ray-clickhouse==${{ needs.validate.outputs.release-version }}",
+        "ray-clickhouse==1.1",
+        1,
+    )
+
+    with pytest.raises(ValueError, match="testpypi operation must use"):
+        workflow_release_version(static_workflow, "1.1")
 
 
 def test_development_source_cannot_create_candidate(monkeypatch) -> None:
@@ -258,7 +314,7 @@ def test_formal_cli_emits_release_candidate_permission(tmp_path: Path) -> None:
     output = tmp_path / "github-output"
     result = _release_cli("ci-version", "--github-output", str(output))
     assert result.returncode == 0, result.stderr
-    assert output.read_text() == "version=1.0\nformal=true\n"
+    assert output.read_text() == "version=1.1\nformal=true\n"
 
 
 @pytest.mark.parametrize("version", ["1.1rc1", "1.1.dev1", "1.1.0.dev0", "01.1.dev0"])
@@ -280,7 +336,7 @@ def test_development_ci_cannot_enable_formal_candidate_recording() -> None:
 @pytest.mark.parametrize(
     ("version", "message"),
     [
-        ("1.1", "formal package metadata must match"),
+        ("1.2", "release notes must identify the current project version"),
         ("1.1.dev1", "canonical major.minor"),
     ],
 )
@@ -288,8 +344,6 @@ def test_static_policy_preserves_formal_identity_and_development_format(
     version: str, message: str
 ) -> None:
     sources = list(_repository_texts())
-    if version == check_release.workflow_release_version(sources[1]):
-        version = "1.0"
     sources[2], replacements = re.subn(
         r'(?m)^version = "[^"]+"$',
         f'version = "{version}"',
@@ -329,10 +383,10 @@ def test_sha256sums_requires_one_wheel_and_one_source_archive() -> None:
     with pytest.raises(ValueError, match="one wheel"):
         parse_sha256sums(f"{FILES[WHEEL]}  {WHEEL}\n")
 
-    with pytest.raises(ValueError, match="ray-clickhouse 1.0"):
+    with pytest.raises(ValueError, match="ray-clickhouse 1.1"):
         parse_sha256sums(
-            f"{FILES[WHEEL]}  other-1.0-py3-none-any.whl\n"
-            f"{FILES[SDIST]}  other-1.0.tar.gz\n"
+            f"{FILES[WHEEL]}  other-1.1-py3-none-any.whl\n"
+            f"{FILES[SDIST]}  other-1.1.tar.gz\n"
         )
 
 
@@ -558,7 +612,7 @@ def test_verify_files_detects_missing_unexpected_and_mismatch(tmp_path: Path) ->
 
 def test_index_identity_requires_exact_candidate_files() -> None:
     data = {
-        "info": {"name": "ray-clickhouse", "version": "1.0"},
+        "info": {"name": "ray-clickhouse", "version": "1.1"},
         "urls": [
             {"filename": name, "digests": {"sha256": digest}}
             for name, digest in FILES.items()
@@ -571,7 +625,7 @@ def test_index_identity_requires_exact_candidate_files() -> None:
     assert validate_index_data(data, FILES)
 
 
-@pytest.mark.parametrize("version", ("0.1.0", "1.1"))
+@pytest.mark.parametrize("version", ("0.1.0", "1.0"))
 def test_index_identity_rejects_another_release_version(version: str) -> None:
     data = {
         "info": {"name": "ray-clickhouse", "version": version},
@@ -585,7 +639,7 @@ def test_index_identity_rejects_another_release_version(version: str) -> None:
 
 
 def test_index_identity_rejects_missing_version_files() -> None:
-    data = {"info": {"name": "ray-clickhouse", "version": "1.0"}, "urls": []}
+    data = {"info": {"name": "ray-clickhouse", "version": "1.1"}, "urls": []}
 
     assert any("file identity" in error for error in validate_index_data(data, FILES))
 
@@ -645,8 +699,18 @@ def test_clickhouse_evidence_requires_passing_junit_and_logs(tmp_path: Path) -> 
             "RECORD_DIGEST",
         ),
         (1, "- github-release", "- publish-all", "github-release"),
-        (1, "--expected-version 1.0", "", "expected-version"),
-        (1, "--expected-version 1.0", "--expected-version 0.1.0", "expected-version"),
+        (
+            1,
+            '--expected-version "${RELEASE_VERSION}"',
+            "",
+            "candidate-derived version",
+        ),
+        (
+            1,
+            '--expected-version "${RELEASE_VERSION}"',
+            "--expected-version 0.1.0",
+            "candidate-derived version",
+        ),
         (
             1,
             "inputs.operation == 'pypi'",
@@ -706,7 +770,7 @@ def test_clickhouse_evidence_requires_passing_junit_and_logs(tmp_path: Path) -> 
         ),
         (
             3,
-            "# ray-clickhouse 1.0",
+            "# ray-clickhouse 1.1",
             "Status: release candidate; not yet published",
             "temporary publication state",
         ),

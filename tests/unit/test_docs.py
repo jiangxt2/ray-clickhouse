@@ -35,7 +35,7 @@ def test_documentation_checker_rejects_missing_file() -> None:
         ("README.md", "\nTrailing space \n", "trailing whitespace"),
         ("README.md", "\nAlpha release.\n", "current Alpha marker"),
         ("doc/source/index.md", "\nAlpha release.\n", "current Alpha marker"),
-        ("release-notes/v1.0.md", "\nAlpha release.\n", "current Alpha marker"),
+        ("release-notes/v1.1.md", "\nAlpha release.\n", "current Alpha marker"),
         (
             "README.md",
             "\nVersion 1.0 is not yet published.\n",
