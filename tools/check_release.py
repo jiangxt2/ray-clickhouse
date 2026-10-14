@@ -508,10 +508,6 @@ def validate_release_texts(
 ) -> list[str]:
     """Return release metadata and workflow policy errors."""
     errors: list[str] = []
-    try:
-        release_version = workflow_release_version(release_workflow)
-    except ValueError as exc:
-        return [str(exc)]
     metadata = _PROJECT_VERSION.search(pyproject)
     source_version = metadata.group(1) if metadata is not None else ""
     if (
@@ -521,9 +517,11 @@ def validate_release_texts(
         errors.append(
             "project metadata must use canonical major.minor or major.minor.dev0"
         )
-    elif not source_version.endswith(".dev0") and source_version != release_version:
-        errors.append("formal package metadata must match the release workflow version")
-    release_tag = f"v{release_version}"
+        return errors
+    try:
+        release_version = workflow_release_version(release_workflow, source_version)
+    except ValueError as exc:
+        return [str(exc)]
     pyproject_fragments = (
         'license = "Apache-2.0"',
         'license-files = ["LICENSE"]',
@@ -596,7 +594,9 @@ def validate_release_texts(
         "predecessor_receipt_artifact_digest:",
         "--predecessor-run-id",
         "--expected-run-id",
-        f"--expected-version {release_version}",
+        '--expected-version "${RELEASE_VERSION}"',
+        "release-version: ${{ steps.candidate-version.outputs.release-version }}",
+        "needs.validate.outputs.release-version",
         "environment: release-tag",
         "environment: testpypi",
         "environment: pypi",
@@ -610,9 +610,11 @@ def validate_release_texts(
         '--source-digest "${CANDIDATE_SHA}"',
         "--source-ref refs/heads/master",
         "--no-deps",
-        f"refs/tags/{release_tag}^{{}}",
-        f"https://pypi.org/pypi/ray-clickhouse/{release_version}/json",
-        f"https://test.pypi.org/pypi/ray-clickhouse/{release_version}/json",
+        "refs/tags/v${{ needs.validate.outputs.release-version }}^{}",
+        "https://pypi.org/pypi/ray-clickhouse/"
+        "${{ needs.validate.outputs.release-version }}/json",
+        "https://test.pypi.org/pypi/ray-clickhouse/"
+        "${{ needs.validate.outputs.release-version }}/json",
         "promotion-receipt.json",
         "Record promotion receipt identity",
         "RECEIPT_DIGEST: sha256:${{ steps.upload-receipt.outputs.artifact-digest }}",
@@ -752,14 +754,25 @@ def validate_release_texts(
     return errors
 
 
-def workflow_release_version(workflow: str) -> str:
-    """Read the explicitly selected formal identity from the release workflow."""
-    versions: list[str] = re.findall(r"--expected-version ([^\s]+)", workflow)
-    if len(versions) != 1 or _TWO_COMPONENT_VERSION.fullmatch(versions[0]) is None:
-        raise ValueError(
-            "release workflow must select one canonical --expected-version"
+def workflow_release_version(workflow: str, source_version: str | None = None) -> str:
+    """Resolve the formal identity from the candidate's canonical package version."""
+    version = VERSION if source_version is None else source_version
+    release_version = version.removesuffix(".dev0")
+    if _TWO_COMPONENT_VERSION.fullmatch(release_version) is None:
+        raise ValueError("release candidate must use a canonical major.minor version")
+    if (
+        workflow.count(
+            "release-version: ${{ steps.candidate-version.outputs.release-version }}"
         )
-    return versions[0]
+        != 1
+        or "needs.validate.outputs.release-version" not in workflow
+        or '--expected-version "${RELEASE_VERSION}"' not in workflow
+    ):
+        raise ValueError(
+            "release workflow must pass the candidate-derived version "
+            "through every promotion"
+        )
+    return release_version
 
 
 def _require_formal_version() -> None:
@@ -772,11 +785,14 @@ def _require_formal_version() -> None:
 def run_checks(root: Path = REPOSITORY_ROOT) -> list[str]:
     """Read repository release inputs and return policy errors."""
     workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
-    release_version = workflow_release_version(workflow)
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    metadata = _PROJECT_VERSION.search(pyproject)
+    source_version = metadata.group(1) if metadata is not None else ""
+    release_version = workflow_release_version(workflow, source_version)
     return validate_release_texts(
         (root / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
         workflow,
-        (root / "pyproject.toml").read_text(encoding="utf-8"),
+        pyproject,
         (root / f"release-notes/v{release_version}.md").read_text(encoding="utf-8"),
     )
 

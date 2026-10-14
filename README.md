@@ -4,9 +4,8 @@ Ray Data read and append connector for ClickHouse physical tables.
 
 > [!IMPORTANT]
 > `ray-clickhouse` is community-maintained and is not an official Ray or ClickHouse project.
-> Development checkouts on `master` declare `1.1.dev0`; the latest published release is
-> `1.0`. Formal releases follow the two-component `major.minor` route. The development
-> version does not select the next formal release version.
+> This source builds package version `1.1`. Formal releases follow the two-component
+> `major.minor` route, and each published release is tied to its own immutable candidate.
 
 This release provides:
 
@@ -60,7 +59,7 @@ classes are internal and are not independent compatibility promises.
 - [Troubleshooting](doc/source/troubleshooting.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
-- [Release notes](release-notes/v1.0.md)
+- [Release notes](release-notes/v1.1.md)
 
 ## Query result reads
 
