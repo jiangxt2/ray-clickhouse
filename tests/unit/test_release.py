@@ -268,6 +268,33 @@ def test_release_workflow_rejects_a_static_version() -> None:
         workflow_release_version(static_workflow, "1.1")
 
 
+def test_release_workflow_rejects_a_static_candidate_metadata_assignment() -> None:
+    _, workflow, _, _ = _repository_texts()
+    assignment = next(
+        line
+        for line in workflow.splitlines()
+        if line.strip().startswith("RELEASE_VERSION=$(python3 -c")
+    )
+    static_workflow = workflow.replace(assignment, "          RELEASE_VERSION=1.1", 1)
+
+    with pytest.raises(
+        ValueError, match="derive its version from candidate package metadata"
+    ):
+        workflow_release_version(static_workflow, "1.1")
+
+
+def test_release_workflow_rejects_a_hardcoded_testpypi_promotion_version() -> None:
+    _, workflow, _, _ = _repository_texts()
+    static_workflow = workflow.replace(
+        "ray-clickhouse==${{ needs.validate.outputs.release-version }}",
+        "ray-clickhouse==1.1",
+        1,
+    )
+
+    with pytest.raises(ValueError, match="testpypi operation must use"):
+        workflow_release_version(static_workflow, "1.1")
+
+
 def test_development_source_cannot_create_candidate(monkeypatch) -> None:
     monkeypatch.setattr(check_release, "VERSION", "1.1.dev0")
     with pytest.raises(ValueError, match="development versions cannot"):

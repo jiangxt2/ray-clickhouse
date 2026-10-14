@@ -30,12 +30,11 @@ Run `make -C doc linkcheck` as the separately diagnosable external-link validati
 
 ## Version route
 
-`master` declares `1.1.dev0` for development. CI builds and installs development packages,
-but does not generate formal release candidates for them. Release commands reject
-development versions before writing promotion records or accessing package indexes.
-Prepare an explicitly reviewed formal source revision and synchronize its metadata,
-workflow version fields, and versioned release notes before release validation. The
-development version does not select the next formal release version.
+Development builds use `1.1.dev0`. CI builds and installs development packages, but does not
+generate formal release candidates for them. Release commands reject development versions
+before writing promotion records or accessing package indexes. A formal candidate uses its
+reviewed package metadata version throughout workflow promotion and in the matching versioned
+release notes. The development version does not select the next formal release version.
 
 Formal releases use exactly two components: `major.minor`. Compatible releases increment minor, for example `1.0`, `1.1`, `1.2`, and `1.10`, without a preset minor limit. Increment major only for approved breaking changes. Do not use three-component patch versions such as `1.0.1`. Package metadata, the annotated `v<version>` tag, distribution filenames, and `release-notes/v<version>.md` must agree exactly.
 

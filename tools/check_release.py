@@ -754,24 +754,66 @@ def validate_release_texts(
     return errors
 
 
+def _workflow_job(workflow: str, job_id: str) -> str:
+    """Return one top-level GitHub Actions job body."""
+    jobs_start = workflow.find("\njobs:\n")
+    if jobs_start < 0:
+        return ""
+    jobs = workflow[jobs_start:]
+    match = re.search(
+        rf"(?ms)^  {re.escape(job_id)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+        jobs,
+    )
+    return "" if match is None else match.group(1)
+
+
 def workflow_release_version(workflow: str, source_version: str | None = None) -> str:
     """Resolve the formal identity from the candidate's canonical package version."""
     version = VERSION if source_version is None else source_version
     release_version = version.removesuffix(".dev0")
     if _TWO_COMPONENT_VERSION.fullmatch(release_version) is None:
         raise ValueError("release candidate must use a canonical major.minor version")
+    validate_job = _workflow_job(workflow, "validate")
+    candidate_version_step = re.search(
+        r"(?ms)^        id: candidate-version\n(.*?)(?=^      - (?:name|uses):|\Z)",
+        validate_job,
+    )
+    candidate_version_body = (
+        "" if candidate_version_step is None else candidate_version_step.group(1)
+    )
+    candidate_metadata_read = (
+        "tomllib.loads" in candidate_version_body
+        and 'Path("candidate-source/pyproject.toml")' in candidate_version_body
+        and 'echo "release-version=${RELEASE_VERSION}" >> "${GITHUB_OUTPUT}"'
+        in candidate_version_body
+        and '--expected-version "${RELEASE_VERSION}"' in candidate_version_body
+    )
     if (
-        workflow.count(
-            "release-version: ${{ steps.candidate-version.outputs.release-version }}"
-        )
-        != 1
-        or "needs.validate.outputs.release-version" not in workflow
-        or '--expected-version "${RELEASE_VERSION}"' not in workflow
+        "release-version: ${{ steps.candidate-version.outputs.release-version }}"
+        not in validate_job
+        or not candidate_metadata_read
     ):
         raise ValueError(
-            "release workflow must pass the candidate-derived version "
-            "through every promotion"
+            "release workflow must derive its version from candidate package metadata "
+            "and pass the candidate-derived version through every promotion"
         )
+    operation_version_references = {
+        "dry-run": "RELEASE_VERSION: ${{ needs.validate.outputs.release-version }}",
+        "testpypi": "ray-clickhouse==${{ needs.validate.outputs.release-version }}",
+        "release-tag": "RELEASE_VERSION: ${{ needs.validate.outputs.release-version }}",
+        "pypi": (
+            "https://pypi.org/pypi/ray-clickhouse/"
+            "${{ needs.validate.outputs.release-version }}/json"
+        ),
+        "github-release": (
+            "RELEASE_VERSION: ${{ needs.validate.outputs.release-version }}"
+        ),
+    }
+    for operation, version_reference in operation_version_references.items():
+        if version_reference not in _workflow_job(workflow, operation):
+            raise ValueError(
+                f"release {operation} operation must use the candidate-derived version"
+            )
     return release_version
 
 
