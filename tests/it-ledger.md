@@ -634,3 +634,29 @@ the later passing run. Existing dependency deprecation warnings remain visible.
 The code is uncommitted; remote CI, commit, push and PR publication have not run.
 Final evidence and the static audit are indexed by
 `.artifacts/simple-predicates/review-fix/summary.json` and `final-review.md`.
+
+## PR 22 Ray Jobs readiness correction
+
+The user authorized CI and automatic-review follow-up with verified fixes.
+The first remote 23.3 cluster job failed while contacting `/api/version` at
+Ray Jobs port 8265, before job submission or pytest collection. The Ray head had
+no healthcheck, so Compose `up --wait` required only a running container. Other
+baseline jobs passed; no predicate assertion caused this setup failure.
+
+Add a bounded HTTP healthcheck to the Ray head in `docker/ray/compose.yaml`.
+The existing `up --wait` then waits for the Jobs API before submission. The
+probe uses Python's standard library, a two-second request timeout, a five-second
+Docker timeout, two-second intervals and 60 attempts. No connector code or
+runtime retry contract changes. Directly execute the configured probe in unit
+tests for success/response closure, connection refusal and HTTP 503.
+
+| Suite | Scope / state | Reason and overlap | Result |
+| --- | --- | --- | --- |
+| Readiness regression proof | New three-case configured-probe regression plus two existing CI configuration tests | Prove the missing probe before the correction; no infrastructure execution | Three new cases failed, two controls passed |
+| Corrected CI units and static checks | `tests/unit/test_cluster_ci.py`, YAML and effective Compose configuration | Only the affected test harness changes; reuse unchanged connector/unit/IT evidence | Five cases passed; formatting/lint and static configuration checks recorded under `.artifacts/simple-predicates/pr22-ci` |
+| Final remote PR CI | New head with the readiness configuration; existing Python/Ray, protocol, package and three-server cluster matrix | A push triggers one final CI execution for the changed bootstrap; no local Docker suite or manual repeat of successful jobs | Pending; final head, job results and Greptile evidence belong in the external project plan and `.artifacts/simple-predicates/pr22-ci` |
+
+Greptile found no actionable issue on the initial head, with confidence 5/5.
+Its result and all CI outcomes must be rechecked against the new PR head before
+reporting completion. Failed setup logs and the uploaded Compose evidence are
+retained; setup failure is not reported as a failing predicate test.
