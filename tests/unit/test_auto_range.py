@@ -219,6 +219,7 @@ def test_auto_reuses_filtered_range_planning_without_projecting_key(planner):
         "column": _column(),
         "filter_sql": "id != %(excluded)s",
         "parameters": {"excluded": 0},
+        "pushed_predicate": None,
     }
     _queries(source)
     planner.key.assert_called_once()

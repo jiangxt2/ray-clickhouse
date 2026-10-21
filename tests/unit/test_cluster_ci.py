@@ -44,3 +44,20 @@ def test_distributed_grant_mode_override_preserves_topology_and_users():
         "legacy-system-grants.xml" in mount
         for mount in compose["services"]["clickhouse"]["volumes"]
     )
+
+
+def test_predicate_compatibility_uses_a_separate_pinned_ray258_runtime():
+    workflow = yaml.safe_load(
+        (Path(__file__).parents[2] / ".github/workflows/ci.yml").read_text()
+    )
+    job = workflow["jobs"]["predicate-ray258-it"]
+    assert job["needs"] == "candidate"
+    checkout, execute, upload = job["steps"]
+    assert checkout["with"]["ref"] == "${{ needs.candidate.outputs.sha }}"
+    assert "tests/integration/test_predicate_pushdown.py" in execute["run"]
+    assert "tests/distributed/test_predicate_pushdown.py" in execute["run"]
+    assert "@sha256:" in execute["env"]["RAY_CLICKHOUSE_RAY_BASE_SOURCE"]
+    assert "2.58.0" in execute["env"]["RAY_CLICKHOUSE_RAY_BASE_LOCAL_IMAGE"]
+    assert execute["env"]["RAY_CLICKHOUSE_CLUSTER_PYTEST_MARKER"] == "integration"
+    assert upload["if"] == "always()"
+    assert "predicate-ray258-it" in workflow["jobs"]["candidate-record"]["needs"]

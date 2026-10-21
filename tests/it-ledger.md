@@ -499,3 +499,278 @@ per-node planning overhead, static topology/security and no shared snapshot.
 The PR-body draft records the completed remote matrix at 2cff914 and separately
 identifies this correction's local evidence. Local validation completed before
 the correction's commit and PR publication; remote outcomes are tracked by PR checks.
+
+## Predicate pushdown (#15)
+
+### Approved settings-guard repair
+
+User approved the revised fixed `EXPLAIN AST SELECT 1` check on 2026-10-21.
+It runs only after the aggregate reports safe, under original settings and a
+fresh query id. Evidence for this revision belongs under `ast-guard-*`.
+
+| Revised selection | Coverage / reuse reason | Code/config state | Result |
+| --- | --- | --- | --- |
+| Affected unit file | Fixed neutral/wrapped/unknown AST, response errors, original settings, distinct query ids, raw driver request and cleanup | Raw-protocol correction snapshot | Passed: 235, zero failures/errors/skips; `ast-guard-raw-units-final.xml`; initial mock fixture failure retained separately |
+| Ray 2.59: exactly 3 nodes | Inherited limit plus existing native-binding and Distributed positives; these traverse the new probe | `dc1c7815d5cc327f8279bfec1df5b43c27e447034a8f0625d386fc2dd2072eef`; isolated harness; ClickHouse 26.8 | 3 failed / zero skips, 4.341s; probe protocol failure; `ast-guard-ray259/pytest.xml` |
+| Ray 2.58: original 6 nodes | Four settings regressions plus both positives; first execution of this repair baseline | Corrected fingerprint `3a1d106603d3eca264aa3d34f975707962836cd618b700c7d4033c0b59d6e789`; byte-identical isolated harness | 6 passed / zero failures/errors/skips, 10.452s; `ast-guard-ray258/pytest.xml` |
+| Ray 2.59: approved corrected-state 3-node recheck | Same inherited-limit / native binding / Distributed nodes; close the post-protocol gap only | Corrected fingerprint `3a1d106603d3eca264aa3d34f975707962836cd618b700c7d4033c0b59d6e789`; reused byte-identical harness; pinned 2.59 runtime | Passed: 3 tests, zero failures/errors/skips, 6.845s; `ast-guard-ray259-final/pytest.xml` |
+
+Reuse the three 2.59 explicit-control passes: those paths return before the new
+AST probe. Reuse all other unaffected evidence; no complete suite or extra IT.
+The exact 2.59 nodes are the inherited-limit, `[True-single]` binding and `[True]`
+Distributed nodes listed below. The 2.58 selection is all six listed nodes.
+
+The 2.59 three-case selection executed once. All three failed in discovery at
+the new EXPLAIN probe. Static driver/server analysis found that `query()` appends
+`FORMAT Native`, which EXPLAIN AST consumes as an inner query clause. Correct the
+protocol using public `raw_query(..., fmt=None)` with the same fixed SQL and
+settings, retaining the exact neutral text AST check. Non-text/default-format
+responses conservatively reject; malformed non-bytes responses remain errors.
+At that stage no 2.59 rerun had occurred and its post-correction proof required
+additional authorization. The original 2.58 six-case run subsequently passed
+on the corrected raw-query snapshot; it was not a repeated suite. Actual Python
+3.12.13 / Ray 2.58.0 / Arrow 19.0.1 / driver 1.5.0 versions were read from the head
+container. The ClickHouse version-read attempt raced with teardown; use the
+unchanged fixed 26.8.1.2041 image digest and its prior verified version evidence.
+No complete suite was run. Both wrappers cleaned their owned containers, network
+and runtime image; no extra dangling image IDs were introduced.
+
+That former validation gap is now closed by the separately approved final 2.59
+three-node run (6.845s). The three old explicit-control passes remain reusable
+because those paths return before the AST probe. Combined with 235 affected units,
+six corrected-state 2.58 cases and unchanged evidence, local PR submission
+standards are met; no new all-green complete-suite execution is claimed. Remote
+CI remains unexecuted. Logs from the unsuccessful normal
+query probe and the intermediate failed unit fixture are retained, not hidden.
+
+User granted that authorization on 2026-10-21: run only those three 2.59 nodes
+once on the corrected raw-query snapshot; reuse all other passes. No production,
+test or runtime-configuration modification, unit rerun, complete suite, commit,
+push or PR is authorized in this completion step. Source/harness verification and
+the exact command are recorded in `ast-guard-ray259-final-state.json` and its
+driver log before execution. The wrapper exited successfully and exact owned
+containers/network/runtime image were removed; no new dangling image IDs remain.
+The pytest header confirms Python 3.12.14; the pinned runtime build confirms
+Ray 2.59.0, Arrow 19.0.1 and driver 1.5.0. The ClickHouse image is the same fixed
+26.8.1.2041 digest used by the prior verified runs. No code or runtime-config
+change occurred; only this ledger, the plan and local evidence were updated.
+
+User approved the two-blocker repair on 2026-10-21. Production scope is only
+`discover_predicate_context`; predicate compilation, bindings, Ray internals and
+the Distributed resolver stay unchanged. Prior positive results are reused for
+unchanged paths, not claimed as proof of the repaired guard.
+
+| Selection | Coverage and reason | Code/config state | Result |
+| --- | --- | --- | --- |
+| Affected unit file | Explicit precedence, neutral values, aggregate metadata, errors and cleanup | Repair snapshot recorded before infrastructure execution | Passed: 218, zero failures/errors/skips, 2.044s; `settings-fix-units.xml` |
+| Ray 2.59 / ClickHouse 26.8 | Four new settings regressions plus two affected positive paths | Fingerprint below; network-only isolated harness | 5 passed / 1 failed / zero skipped, 11.625s; inherited user limit still permits incorrect pushdown |
+| Ray 2.58 / ClickHouse 26.8 | Same six nodes, verified compatibility baseline | Identical source/test bytes, separate pinned runtime | Not started: investigate the confirmed server-context failure first |
+
+Exact IT nodes (all unparameterized except the two existing positive cases):
+
+- `tests/integration/test_predicate_pushdown.py::test_server_limit_preserves_ray_residual`
+- `tests/integration/test_predicate_pushdown.py::test_result_row_cap_does_not_break_predicate_planning`
+- `tests/integration/test_predicate_pushdown.py::test_result_byte_cap_does_not_break_predicate_planning`
+- `tests/integration/test_predicate_pushdown.py::test_inherited_server_limit_preserves_ray_residual`
+- `tests/integration/test_predicate_pushdown.py::test_filtered_discovery_and_scans_share_binding_protocol[True-single]`
+- `tests/distributed/test_predicate_pushdown.py::test_expression_only_filter_replans_a_previously_unfiltered_source[True]`
+
+No complete suite, commit, push or PR is authorized. Logs and XML will be retained
+under `.artifacts/predicate-pushdown/settings-fix-*`. Owned temporary users and
+tables are cleaned in fixture/finally blocks; default users/profiles are untouched.
+Ruff format/lint and strict mypy for the affected source passed. Runtime/test/config
+fingerprint: `972a4c32ff871688eb4afbcf30fe3fe39ee6c2944cc7a04d3a4b25798512856f`.
+The fresh Docker network inventory exposed no overlapping 10.250 subnet, but the
+daemon rejected its pool at creation. The first 2.59 launch stopped before pytest
+(zero cases executed), and the wrapper cleaned its owned resources/runtime image.
+Continue with the previously used environment-only recovery: fresh temporary
+`settings-fix-isolated/` harness, byte-identical Python source/tests, only copied
+Compose/runner addresses changed to 10.251. Repository infrastructure is unchanged.
+Recovery metadata: `settings-fix-network-recovery.json`; failed-start evidence:
+`settings-fix-ray259/`. Executed selection: `settings-fix-ray259-isolated/pytest.xml`.
+Actual runtime: Python 3.12.14, Ray 2.59.0, Arrow 19.0.1, driver 1.5.0,
+ClickHouse 26.8.1.2041; version evidence is retained alongside the run.
+The ordinary inherited-limit read returned exactly ids 0..9999, but its filtered
+branch incorrectly returned ids 20000..29999. The other five cases passed, including
+both positive paths; retain those results without rerunning them on unchanged code.
+No further long test was launched after the failure. Additional long reruns need
+the separately required authorization. Static investigation confirmed the
+server-context root cause. The wrapper completed cleanup after this failed run.
+Static root cause is confirmed in ClickHouse 26.8 `executeQuery.cpp`: limit/offset
+are materialized into a wrapper, then cleared before `system.settings` is read.
+The plan proposes a fixed `EXPLAIN AST SELECT 1` guard after the safe aggregate;
+it is not implemented or executed. Pending authorization: three affected 2.59
+nodes (inherited limit plus both positives), then the original six 2.58 nodes.
+Reuse the three explicit-control passes and all other unchanged evidence.
+
+Approved 2026-10-21, base `69346ebd35d2eafeca5fa50cea67cbe38428b171`, branch
+`predicate-pushdown`. Evidence belongs under `.artifacts/predicate-pushdown/`.
+Each executed row records the source/test/config fingerprint, actual versions,
+command and logs. Prior #20 results do not prove the new predicate behavior.
+Ray's inherited `limit().filter()` reordering is documented separately and is
+not modified. This work must preserve residual-before-limit execution.
+
+| Suite | Coverage and baseline | Reason / overlap policy | State / evidence |
+| --- | --- | --- | --- |
+| Development units | Compiler, bindings, cloning and planner; no infrastructure | Minimal affected diagnostics, then one final unit/contract selection | 627 passed; changed 94-case predicate file passed after added assertions; counts are not summed |
+| Ray contract | Python 3.12, Ray 2.59.0 and 2.58.0 | Native optimizer acceptance/rejection, aliases, branches, residuals/limits; version-specific contract evidence | 2.59: nine passed, changed opaque-UDF case passed separately; 2.58: three passed |
+| Primary protocol final | Ray 2.59.0 / ClickHouse 26.8.1.2041 | Combined with cluster once because another task owns standalone resources | Shared 181-case report: 179 passed, two query-log assertions failed; no skips |
+| Primary cluster final | Ray 2.59.0 / ClickHouse 26.8.1.2041 | Same combined report, not a second suite | Two corrected assertions plus new opaque-UDF protocol case passed the approved three-case recheck; 179 unaffected results reused |
+| Ray 2.58 compatibility | ClickHouse 26.8.1.2041; two new predicate files | Minimal second-runtime evidence, no complete repeated container suite | 33 passed, zero skips, 42.87s; `ray258-final/pytest.xml` |
+| Static/docs/package | Ruff, strict mypy, compatibility/docs/release checks, build, Sphinx | Final implementation checks; no database overlap | Passed; wheel/sdist compiler bytes match source, Twine passed |
+
+Development units initially reported seven assertion failures: six assertions
+incorrectly treated digits in parameter type names as inlined values, and one
+existing mock expected the old keyword set. Corrected those assertions without
+weakening behavior checks; the affected selection passed 250 tests (2.03s).
+Logs: `.artifacts/predicate-pushdown/development-units*.log`.
+
+Ray 2.59 native contract diagnostic passed all three cases (12.69s), including
+acceptance/chaining/aliases, original-branch isolation, whole-OR rejection,
+residual-before-limit and separately characterized inherited limit reordering.
+Source fingerprint `3ee8213c2fbd2d27a650a13de9757299e483a22e6acfecf499a50153e1bc4a27`;
+actual Python 3.12.12, Ray 2.59.0, Arrow 19.0.1. State, log and XML:
+`.artifacts/predicate-pushdown/ray-contract-state.json`, `ray259-contract.log`,
+`ray259-contract.xml`. This is a development diagnostic; the final full contract
+selection may include it once after source/test changes stabilize.
+
+The standalone protocol entry point stopped at its ownership preflight:
+`ray-clickhouse-it` already belongs to another task. No container was created or
+removed. Run the same new protocol selection through the existing unique-project
+Distributed wrapper instead; it hosts the same ClickHouse 26.8 and Ray 2.59
+protocol tests inside the isolated three-node runtime. Combine the final full
+protocol and distributed selections into one integration-marker run to avoid
+duplicating infrastructure suites. Do not modify scripts or the other task's
+resources. Log: `protocol-diagnostic-driver.log`.
+
+Next diagnostic: new real-server predicate file on Ray 2.59 / ClickHouse 26.8.
+Purpose: validate SQL execution and semantics absent from the mock contracts;
+this is not an already-passed protocol suite. Final full protocol execution
+remains one planned run. Extra long reruns follow the approved code/configuration
+change or failed/interrupted-result rules; successful unchanged suites are reused.
+
+Protocol diagnostic completed: 16 passed, four failed in 7.96s. All four failures
+were query-log assertions expecting placeholder names. ClickHouse logs native
+bindings as normalized `_CAST(value, type)` expressions; result multisets already
+matched. Correct assertions to check actual normalized conditions and typed
+casts, and add full Boolean NULL truth tables, numeric extrema, dictionary types
+and the intentional UInt64 residual error before final integration. The failed
+report remains in `protocol-cluster-diagnostic/pytest.xml` with full logs and
+source fingerprint. Its Compose project, runtime image and network were removed.
+No successful final suite has been repeated. The 2.58 host environment is isolated
+under `.artifacts/predicate-pushdown/venv258`; its native contract suite is running.
+
+Ray 2.58 native contract diagnostic completed: three passed (25.65s), logs and XML
+`ray258-contract.*`. The separate fixed 2.58 base image was pulled through the
+domestic mirror and its manifest digest matched
+`sha256:c3c9573c5c6bfe4127885f79622d6a32064d34cafc7d156ec728aab8657be250`.
+Static Ruff/mypy, compatibility/docs/release checks and strict Sphinx HTML/spelling
+passed after adding the focused CI job and updating the matching existing guards.
+
+Next targeted diagnostic selects only the previously unexecuted numeric/NULL/
+dictionary/UInt64 regression and the new Distributed predicate file, on 2.59/26.8.
+It does not rerun the 16 passed protocol cases. It verifies newly completed #20
+composition and conversion fallback before the one final complete combined suite.
+Source/config fingerprint, image identity, XML and ownership cleanup are recorded
+by the wrapper under `distributed-diagnostic/`.
+
+Targeted Distributed/numeric diagnostic passed all 12 cases (24.77s), zero skips,
+on source/test/config fingerprint
+`6686df550bb80e9f751a5b69edcb69828e67ff109900ceff3b386a8316484909`.
+It covers every split and binding protocol, both fixed shard origins, conversion
+fallback, full nullable Boolean truth tables, signed/unsigned extrema, dictionary
+strings and the preserved UInt64 Arrow error. Strengthen the expression-only test
+to assert actual local/logical query selection before its separate residual case;
+the previous version proved residual correctness but did not offer an accepted
+complete expression. This strengthened case will run in the final suite.
+
+Final Ray 2.59 non-Ray units/contracts passed 627 cases (2.82s); all nine real-Ray
+contracts passed (13.24s). Marker-separated selections cover every unit/contract
+test, without skips. Logs/XML: `final-units.*`, `final-ray259-contract.*`.
+After adding malformed-context and cancellation assertions, rerun only that changed
+unit file; no unchanged Ray contract rerun is needed.
+
+Final primary run is ready: one combined complete distributed and protocol
+selection on Ray 2.59 / ClickHouse 26.8, marker integration, unique project,
+`.artifacts/predicate-pushdown/primary-final/`. It includes diagnostic cases once
+in their final complete suite. There was no earlier passed full suite. Next,
+Ray 2.58 executes only the two new predicate files once, under a distinct fixed
+runtime and `.artifacts/predicate-pushdown/ray258-final/`.
+
+Primary complete run finished: 181 tests, 179 passed, two failed, zero skipped,
+143.009s. The two failures are the strengthened expression-only query-log check
+(conversion off/on): result equality and local/logical target selection passed,
+but the all-queries assertion included logs from other tests. Static review had
+already corrected it to select this fixture's local/Distributed table names.
+Production source is unchanged. Full failed XML/logs and runtime fingerprint are
+retained in `primary-final/`; all project resources were cleaned by the wrapper.
+Do not repeat the full suite. Reuse the 179 unaffected passed cases.
+
+Static review also replaced the mock contract's IN-only residual scenario with
+an opaque UDF, so Ray actually splits an accepted integer prefix from a residual.
+That changed Ray 2.59 contract case passed (8.15s), `ray259-opaque-residual.*`.
+A corresponding new protocol case and the two corrected query-log cases are the
+only remaining primary-baseline validation scope. A further Docker run of these
+three cases requires the additional long-test approval prescribed by the global
+agreement; no extra primary run has been started.
+
+The already-planned Ray 2.58 final compatibility suite now selects 33 cases from
+the two new predicate files, including the corrected table-scoped query-log tests
+and opaque-UDF residual test. This is its first real-infrastructure execution.
+
+Ray 2.58 final compatibility completed successfully: 33 passed, zero failures,
+errors or skips, 42.87s. Both corrected table-scoped expression-only checks and
+the new opaque-UDF protocol case passed. Runtime metadata was read from the exact
+test head into `ray258-runtime-versions.json`; base image identity and full
+runtime source/config fingerprint are in `ray258-final/`. This evidence does
+not substitute for the pending three-case Ray 2.59 recheck.
+
+Before the three-case authorization below, delivery was implemented, statically
+reviewed and packaged, with primary verification pending extra-run approval.
+Reviewable actual cumulative
+diff (including all new files), self-review and exact proposed three-case command:
+`actual.diff`, `static-review.md`, `remaining-validation.md` under
+`.artifacts/predicate-pushdown/`. No commit, push, PR or Issue operation occurred.
+
+### Approved three-case primary recheck
+
+User explicitly approved only the three remaining Ray 2.59 cases on 2026-10-21.
+Run conversion-off and conversion-on expression-only log checks, plus the new
+accepted-prefix/opaque-UDF residual-before-limit protocol case. Reuse the 179
+unaffected primary results and all other passed evidence. Do not run the complete
+suite, other test selections, commit, push or PR operations. Production/test
+source remains unchanged. This is the single newly approved recheck.
+
+| Suite | Runtime and coverage | Code / reason / overlap | Result |
+| --- | --- | --- | --- |
+| Three-case primary recheck | Ray 2.59.0 / ClickHouse 26.8.1.2041; exactly three explicit pytest node IDs | Two corrected log assertions and one new opaque-UDF protocol case; 179 unaffected cases reused | Passed: 3 tests, zero failures/errors/skips, 9.706s; successful evidence `.artifacts/predicate-pushdown/primary-recheck-isolated/` |
+
+The first launch stopped before pytest because Docker rejected the fixed
+10.250.0.0/24 network with "Pool overlaps". No test case executed. The existing
+trap cleaned only this attempt's project/runtime. Preserve its failure log in
+`primary-recheck-driver.log`; do not touch another project's network.
+Prepare a temporary harness under `.artifacts/predicate-pushdown/network-isolated/`:
+copy source/tests byte-for-byte and change only the subnet/endpoint prefix from
+10.250 to the inspected-free 10.251 in its copied Compose file and copied runner.
+Repository source/tests/scripts are unchanged. Recovery metadata is recorded in
+`primary-recheck-network-recovery.json`. Run the same three approved node IDs once
+in this isolated network, with evidence under `primary-recheck-isolated/`.
+
+The isolated run completed successfully on its first test execution: exactly
+three collected/executed cases, all passed, zero failures/errors/skips, 9.706s.
+Both conversion-off/on expression-only reads matched their expected row multisets
+and the scoped logical/local query assertions. The opaque-UDF case preserved
+residual-before-limit behavior. Build evidence confirms Ray 2.59.0, Arrow 19.0.1,
+clickhouse-connect 1.5.0 and a successful pip dependency check. The fixed base and
+runtime image identities are retained by the wrapper. Source/config fingerprint:
+`22863452fdae89db87fe6c94ae9123d6863a9c2d37070307b6e530876603325b`.
+
+Machine-readable result: `.artifacts/predicate-pushdown/primary-recheck-result.json`;
+XML: `primary-recheck-isolated/pytest.xml`; full output:
+`primary-recheck-isolated-driver.log`. The wrapper exited zero and removed only
+its unique project/network/runtime image. Production diff matches the previous
+delivery; source/tests were copied byte-for-byte. No repository source, test or
+runner change was made during this recheck. Reuse the 179 unaffected primary
+cases and all prior passed evidence. Do not sum repeated cases or describe this
+as a repeated complete suite. Approved local verification is now closed; no
+commit, push, PR, Issue or Ray modification occurred.

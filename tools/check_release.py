@@ -674,7 +674,8 @@ def validate_release_texts(
         "PACKAGE_VERSION: ${{ needs.candidate.outputs.version }}",
         "assert version('ray-clickhouse') == os.environ['PACKAGE_VERSION']",
         "needs: [candidate, unit, quality, docs, docs-linkcheck, "
-        "clickhouse-it, ray-cluster-it, package-build, package-smoke]",
+        "clickhouse-it, ray-cluster-it, predicate-ray258-it, "
+        "package-build, package-smoke]",
         "SHA256SUMS",
         "release-candidate.json",
         "artifact-id",
