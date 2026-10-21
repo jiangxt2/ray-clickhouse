@@ -139,6 +139,11 @@ def read_clickhouse(
 
     Returns:
         A Dataset containing the source rows.
+
+    Notes:
+        Local conversion adds per-node planning and requires static topology and
+        security configuration. Independent scans do not share a snapshot. See
+        https://github.com/jiangxt2/ray-clickhouse/blob/master/doc/source/architecture.md#filtered-distributed-local-scans
     """
     ensure_supported_ray_version()
     if (table is None) == (query is None):

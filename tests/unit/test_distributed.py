@@ -7,7 +7,7 @@ import pyarrow as pa
 import pytest
 
 from ray_clickhouse import ConfigurationError, read_clickhouse
-from ray_clickhouse._discovery import DiscoverySnapshot
+from ray_clickhouse._discovery import DiscoverySnapshot, discover_schema
 from ray_clickhouse._distributed import (
     CONTEXT_DEFAULTS,
     MetadataCapabilities,
@@ -434,7 +434,7 @@ def resolved_readers():
     return source, target
 
 
-def resolve_with_readers(source, target, connection=CONNECTION):
+def resolve_with_readers(source, target, connection=CONNECTION, schema=None):
     def open_reader(connection, limits):
         manager = Mock()
         manager.__enter__ = Mock(
@@ -447,11 +447,32 @@ def resolve_with_readers(source, target, connection=CONNECTION):
         return resolve_distributed(
             connection,
             QualifiedTable("db", "t"),
-            SchemaPlan(SCHEMA, COLUMNS[:1]),
+            schema if schema is not None else SchemaPlan(SCHEMA, COLUMNS[:1]),
             ResourceLimits(),
             filter_sql="id > 0",
             split="single",
         )
+
+
+@pytest.mark.parametrize("comment", ["2026", "0", "-1"])
+def test_numeric_describe_comments_do_not_appear_as_source_schema_drift(comment):
+    client = Mock()
+    client.query.return_value.result_rows = [("id", "Int64", "", "", comment, "", "")]
+    client.query_arrow.return_value = pa.Table.from_batches([], schema=SCHEMA)
+    with patch("ray_clickhouse._discovery._open", return_value=client):
+        schema = discover_schema(
+            CONNECTION, QualifiedTable("db", "t"), ResourceLimits()
+        )
+    assert schema.columns[0].position == 1
+    source, target = resolved_readers()
+    assert len(resolve_with_readers(source, target, schema=schema).targets) == 2
+
+
+def test_source_position_disagreement_remains_a_schema_error():
+    source, target = resolved_readers()
+    source.columns.return_value = (replace(COLUMNS[0], position=2),)
+    with pytest.raises(SchemaError, match="source declarations changed"):
+        resolve_with_readers(source, target)
 
 
 def test_resolver_selects_one_replica_and_preserves_http_tls_and_secrets():

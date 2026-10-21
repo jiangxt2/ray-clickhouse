@@ -213,19 +213,24 @@ def render_read_projection(columns: Sequence[TargetColumn]) -> str:
     return ", ".join(projection)
 
 
-def parse_describe_rows(rows: Sequence[Sequence[Any]]) -> tuple[TargetColumn, ...]:
+def parse_describe_rows(
+    rows: Sequence[Sequence[Any]], *, position_index: int | None = None
+) -> tuple[TargetColumn, ...]:
+    """Use DESCRIBE row order unless the caller explicitly supplies positions."""
     columns: list[TargetColumn] = []
     for row in rows:
         if len(row) < 2 or not isinstance(row[0], str) or not isinstance(row[1], str):
             raise SchemaError("ClickHouse DESCRIBE returned malformed metadata")
         position = len(columns) + 1
-        if len(row) > 4 and row[4] not in (None, ""):
-            try:
-                position = int(row[4])
-            except (TypeError, ValueError):
-                # DESCRIBE TABLE returns comment in this position on some versions;
-                # system.columns returns the numeric position.
-                pass
+        if position_index is not None:
+            if (
+                len(row) <= position_index
+                or not isinstance(row[position_index], int)
+                or isinstance(row[position_index], bool)
+                or row[position_index] < 1
+            ):
+                raise SchemaError("ClickHouse column metadata has an invalid position")
+            position = row[position_index]
         columns.append(
             TargetColumn(
                 name=row[0],

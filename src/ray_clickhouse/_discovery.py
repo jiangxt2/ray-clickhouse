@@ -537,7 +537,7 @@ def discover_target(
             settings=settings,
             transport_settings=transport_settings,
         )
-        columns = parse_describe_rows(result.result_rows)
+        columns = parse_describe_rows(result.result_rows, position_index=4)
         return TargetTable(table.database, table.table, engine, columns)
     except RayClickHouseError:
         raise

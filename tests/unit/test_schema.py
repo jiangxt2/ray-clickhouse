@@ -1,7 +1,11 @@
+from unittest.mock import Mock, patch
+
 import pyarrow as pa
 import pytest
 
+from ray_clickhouse._discovery import discover_target
 from ray_clickhouse._errors import SchemaError, WriteError
+from ray_clickhouse._models import ClickHouseConnection, QualifiedTable, ResourceLimits
 from ray_clickhouse._schema import (
     TargetColumn,
     TargetTable,
@@ -37,6 +41,53 @@ def test_parse_describe_accepts_comment_in_position_slot() -> None:
     )
 
     assert [column.position for column in columns] == [1, 2]
+
+
+@pytest.mark.parametrize("comment", ["2026", "0", "-1", "1", "001", "comment"])
+def test_describe_comments_never_supply_positions(comment):
+    rows = [("id", "Int64", "", "", comment, "", "")]
+    assert parse_describe_rows(rows)[0].position == 1
+    rows.append(("value", "String", "", "", "0", "", ""))
+    columns = parse_describe_rows(rows)
+    assert [(column.name, column.position) for column in columns] == [
+        ("id", 1),
+        ("value", 2),
+    ]
+
+
+def test_explicit_system_column_positions_are_preserved_for_writes():
+    rows = [
+        ("value", "String", "DEFAULT", "'x'", 7),
+        ("id", "UInt64", "", "", 3),
+    ]
+    client = Mock()
+    client.query.return_value.result_rows = rows
+    with (
+        patch("ray_clickhouse._discovery._open", return_value=client),
+        patch("ray_clickhouse._discovery.discover_engine", return_value="MergeTree"),
+    ):
+        target = discover_target(
+            ClickHouseConnection("entry", "db"),
+            QualifiedTable("db", "data"),
+            ResourceLimits(),
+        )
+    assert [(column.name, column.position) for column in target.columns] == [
+        ("id", 3),
+        ("value", 7),
+    ]
+    assert target.columns[1].default_expression == "'x'"
+    client.close.assert_called_once()
+
+
+@pytest.mark.parametrize("position", [None, "2", True, 0, -1])
+def test_explicit_system_column_positions_must_be_valid(position):
+    with pytest.raises(SchemaError, match="invalid position"):
+        parse_describe_rows([("id", "Int64", "", "", position)], position_index=4)
+
+
+def test_explicit_system_column_position_cannot_be_missing():
+    with pytest.raises(SchemaError, match="invalid position"):
+        parse_describe_rows([("id", "Int64", "", "")], position_index=4)
 
 
 def test_read_projection_normalizes_date_and_nested_date_types() -> None:

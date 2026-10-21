@@ -465,3 +465,37 @@ unchanged and pass the complete primary suite. No remaining review finding.
 Ruff, strict mypy, docs/compatibility/release checks, strict Sphinx and spelling
 passed. Wheel/sdist and byte-level module verification are recorded in the fix
 evidence index. No commit, push, PR or Issue mutation was performed.
+
+## Numeric comment correction
+
+Approved scope: distinguish native DESCRIBE comments from explicitly selected
+system.columns positions, preserve schema drift detection, and document planning
+overhead, static configuration and independent query snapshots in the public
+read docstring. PR #20 at 2cff914 passed its remote CI and Greptile review; those
+results do not substitute for verification of this subsequent parser correction.
+
+| Suite | Coverage / state | Reason and overlap | Result |
+| --- | --- | --- | --- |
+| Unit/contract and static checks | Final parser/source integration, resolver numeric comments, write positions and true drift | Full fast local suite; no database cases | 532 non-Ray cases passed; six unchanged local-Ray contracts retain prior evidence; Ruff, strict mypy, docs/compatibility/release checks, strict Sphinx and spelling passed |
+| New numeric-comment IT | ClickHouse 26.8.1.2041, 23.3.22.3 and 24.8.14.39; two cases per baseline | Single/multiple columns, duplicates, native descriptions, logical/local Ray reads, query reads and append writes; run only this new file once per baseline | All three baselines passed both cases on their first run, zero failures/errors/skips |
+
+The shared parser changed, so the new real-server cases exercise both DESCRIBE
+callers and the system.columns write caller. Use cached fixed images, the existing
+two-shard/two-replica/three-Ray-node runner, unique Compose projects and its cleanup
+trap. Save source fingerprints, XML and logs under .artifacts/it/numeric-comments-*.
+Retain the earlier unrelated protocol, security, type and lifecycle evidence;
+do not repeat successful unchanged infrastructure suites.
+
+Final execution index: .artifacts/it/numeric-comments-execution.json. Each baseline
+ran the identical source/test/config state. The single-column regression checks
+the actual DESCRIBE comment '2026', verifies position 1, and completes conversion;
+the multi-column case also checks comment '0' and output order. Confirmed append
+writes and query reads exercise the other callers of the shared parser. Unit
+coverage retains errors for real source-position changes and invalid explicit
+write positions. No resolver check was removed or changed into fallback.
+
+The public docstring links to the existing architecture section and states
+per-node planning overhead, static topology/security and no shared snapshot.
+The PR-body draft records the completed remote matrix at 2cff914 and separately
+identifies this correction's local evidence. Local validation completed before
+the correction's commit and PR publication; remote outcomes are tracked by PR checks.
