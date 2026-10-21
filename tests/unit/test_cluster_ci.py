@@ -1,7 +1,10 @@
 """Check that multi-node validation uses the candidate and preserves evidence."""
 
 from pathlib import Path
+from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 
+import pytest
 import yaml
 
 
@@ -61,3 +64,38 @@ def test_predicate_compatibility_uses_a_separate_pinned_ray258_runtime():
     assert execute["env"]["RAY_CLICKHOUSE_CLUSTER_PYTEST_MARKER"] == "integration"
     assert upload["if"] == "always()"
     assert "predicate-ray258-it" in workflow["jobs"]["candidate-record"]["needs"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        None,
+        ConnectionRefusedError("Jobs API is starting"),
+        HTTPError("http://127.0.0.1:8265/api/version", 503, "not ready", {}, None),
+    ],
+)
+def test_ray_head_healthcheck_requires_available_jobs_api(error):
+    root = Path(__file__).parents[2]
+    compose = yaml.safe_load((root / "docker/ray/compose.yaml").read_text())
+    healthcheck = compose["services"]["ray-head"]["healthcheck"]
+    command = healthcheck["test"]
+    assert command[:3] == ["CMD", "python", "-c"]
+    assert healthcheck["interval"] == "2s"
+    assert healthcheck["timeout"] == "5s"
+    assert healthcheck["retries"] == 60
+    assert (
+        "up --detach --wait --no-build"
+        in (root / "scripts/run_ray_cluster_it.sh").read_text()
+    )
+    response = Mock()
+    with patch(
+        "urllib.request.urlopen", return_value=response, side_effect=error
+    ) as request:
+        if error is None:
+            exec(command[3], {})
+            response.close.assert_called_once_with()
+        else:
+            with pytest.raises(type(error)):
+                exec(command[3], {})
+            response.close.assert_not_called()
+    request.assert_called_once_with("http://127.0.0.1:8265/api/version", timeout=2)

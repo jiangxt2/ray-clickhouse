@@ -502,6 +502,27 @@ the correction's commit and PR publication; remote outcomes are tracked by PR ch
 
 ## Predicate pushdown (#15)
 
+### CI readiness repair and merged-main composition
+
+User requested resolving PR #23 CI on 2026-10-21. The 2.58 job on `1697754`
+stopped at Ray Jobs `/api/version` with connection refused before pytest; no XML
+or executed test case exists for that failure. The other 21 CI checks passed.
+Master `9788840` already includes the bounded Jobs API healthcheck from #22 and
+projection pushdown from #21. Reuse their implementation, preserve all histories,
+and validate the newly combined predicate/projection path. No PR merge is allowed.
+
+| Selection | Coverage / reason | State |
+| --- | --- | --- |
+| Affected units | CI healthcheck, compatibility, predicate/projection clone state, datasource, SQL and Distributed policy | Passed: 605 tests, 2.12s; Ruff and mypy passed; merged runtime/test/config SHA-256 `3439b19d61a842023703d14a9f64527eff5248cc530b7d0660c08992553ab4c4`; evidence `.artifacts/predicate-pushdown/ci-repair/units.xml` and `source-state.json` |
+| Ray 2.59 native contracts | Existing predicate contracts plus projection selection and new composition cases | Passed: 10 tests, 15.96s; Python 3.12.12 / Ray 2.59.0 / PyArrow 19.0.1; same merged state; evidence `.artifacts/predicate-pushdown/ci-repair/ray259-contract.xml`; real Ray, fixture-backed ClickHouse metadata/data |
+| Ray 2.58 native contracts | Same minimal selectors on required second runtime | Passed: 10 tests, 14.84s; Python 3.12.12 / Ray 2.58.0 / PyArrow 19.0.1; same merged state; evidence `.artifacts/predicate-pushdown/ci-repair/ray258-contract.xml`; no repeated local Docker suite |
+| New-head normal CI | Corrected Jobs API readiness, new real-server projection/predicate cases and existing matrix | One normal pipeline after updating #23; do not manually rerun successful unchanged jobs |
+
+New real-server cases cover nonempty/empty output projections with accepted
+filters, both operator orders, full range facts, and every fixed Distributed shard.
+Unchanged local/remote passes are retained as evidence for their unchanged scope,
+not reported as a new merged-head CI success. No extra local container suite.
+
 ### Approved settings-guard repair
 
 User approved the revised fixed `EXPLAIN AST SELECT 1` check on 2026-10-21.
@@ -774,3 +795,251 @@ runner change was made during this recheck. Reuse the 179 unaffected primary
 cases and all prior passed evidence. Do not sum repeated cases or describe this
 as a repeated complete suite. Approved local verification is now closed; no
 commit, push, PR, Issue or Ray modification occurred.
+
+
+## V1 table projection pushdown
+
+Issue #14 is implemented through public V1 Datasource hooks on Ray 2.58.0 and
+2.59.0. Full discovery facts remain separate from ordered output fields; cloned
+local shard sources retain independent projection state. Empty selections use
+the public BlockAccessor to preserve native cardinality. Query reads and the
+dependency window are unchanged.
+
+| Suite | Coverage / environment | Result and evidence |
+| --- | --- | --- |
+| Unit and contract | Python 3.12.12, Ray 2.59.0, PyArrow 19.0.1 | All 558 distinct cases covered: 556 initial passes, the corrected non-nullability assertion passed its targeted rerun, and the subsequently added legacy-gate case passed in the 43-case targeted unit run. Logs: `.artifacts/projection/primary.log`, `primary-correction.log`, `unit-final.log` |
+| Additional Ray contract | Python 3.12.12, Ray 2.58.0; same production source | Four projection/filter cases passed, including native empty materialization and follow-up batch operations. `.artifacts/projection/ray258.log` |
+| Reviewed contract correction | Python 3.12.12, PyArrow 19.0.1; isolated Ray 2.55.0, 2.58.0 and 2.59.0 runtimes | All nine approved targeted cases passed: three per version, zero failures/errors/skips. Final corrected two-stage reference, legacy fallback semantics and strict verified-version schema/cardinality assertions. `.artifacts/projection/compatibility-correction/ray255.xml`, `ray258.xml`, `ray259.xml` and matching logs/version records |
+| Full single-node protocol | ClickHouse 26.8.1.2041, Ray 2.59.0, clickhouse-connect 1.5.0 | 97 passed in the full run; the remaining new ordering case passed targeted verification. 98 distinct cases passed; three established cluster cases were deselected by the single-node profile. `.artifacts/it/projection-single/` and `.artifacts/it/projection-single-final/` |
+| Affected distributed suite | Two ClickHouse shards, two replicas per shard and three Ray nodes; ClickHouse 26.8.1.2041, Linux Python 3.12.14, Ray 2.59.0 | 54 passed, zero skips/errors/failures. All split modes, cached child clones, empty outputs, actual worker data queries and existing local-read regressions. `.artifacts/it/projection-cluster/` |
+| Static, docs and package | Final implementation and documentation | Ruff format/lint, strict mypy, documentation/compatibility/release checks, Sphinx HTML and spelling, source/wheel build and twine check passed |
+
+Data-query assertions inspect `system.query_log`, excluding DESCRIBE and zero-row
+schema probes, to prove column pruning. Value assertions cover Date, Decimal,
+NULL, requested column order and filters using non-output keys. Empty/nonempty
+tables and all four split modes retain native row counts after materialization.
+The initial source schema is still validated before Ray optimization.
+
+The production code remained unchanged throughout final contract and database
+validation. The first contract comparison incorrectly adopted Ray Project's
+relaxed nullability; its correction independently requires the original
+ClickHouse non-nullable field. The ordering IT was corrected to recognize the
+driver's appended ArrowStream FORMAT and to compare exact rows independently of
+Ray's default filtered-block completion order. Initial validation reran only
+failed cases; no passed full infrastructure suite was repeated. The distributed run also passed
+the stronger delivery-order assertion, so its unchanged production/SQL/value
+evidence remains valid after that test-only correction.
+
+Complete static review later identified that the projection contract test
+unconditionally required an empty schema on Ray 2.55.0, whose native empty
+projection retains original columns. The corrected test gives both paths the
+same two selections and compares native schema, values, row counts and follow-up
+batch counts on each runtime. Nonempty projections still require requested
+column order and, on enabled versions, original non-nullable fields. Enabled
+versions also require empty output with three rows. The legacy path still must plan all source
+columns. No skip or capability-window change was introduced.
+
+The user explicitly approved rerunning these nine cases because the reference
+pipeline and schema/cardinality assertions changed. Every version ran its three
+cases exactly once on the corrected test. Production hashes stayed unchanged;
+the existing ClickHouse and distributed results are reused without rerunning
+those suites. Ruff format/lint, diff checks and cumulative static self-review
+passed, resolving the review finding.
+
+The Docker scripts captured image/container baselines and removed their own
+Compose projects and temporary runtime image. Existing base images and other
+projects were retained. Initial per-file source/test hashes are recorded in
+`.artifacts/projection/final-source-hashes.json`; the corrected source/test hashes
+are in `.artifacts/projection/compatibility-correction/source-hashes.json`.
+Execution details and requirement traceability are in
+`~/GitHub/plans/ray-clickhouse-projection-pushdown.md`.
+
+### Legacy Ray projection IT review correction
+
+PR #21 review identified a strict Date-nullability assertion outside the
+verified pushdown versions. Static analysis also found an id-only empty-projection
+reference that could not match Ray 2.55 retaining the full source row. Both
+test compatibility omissions are corrected without changing production code.
+
+Only enabled pushdown versions must preserve the non-nullable Date field in the
+projected output. All versions still check values, column order, logical types,
+filters and data-query SQL. The native empty-selection reference now contains
+all filtered source columns with the discovered schema, including typed empty
+tables. Exact row multisets are compared across physical splits, without adding
+a row-order guarantee. Native counts and follow-up batch counts remain checked.
+
+| Suite | Coverage / environment | Result and evidence |
+| --- | --- | --- |
+| Legacy native fallback | Ray 2.55.0, Python 3.12.12, PyArrow 19.0.1, clickhouse-connect 1.5.0, ClickHouse 26.8.1.2041 | Twelve affected IT cases passed once; zero failures/errors/skips. `.artifacts/it/review-it-ray255/` |
+| Enabled pushdown | Ray 2.59.0, otherwise the same client/server baseline | The same twelve cases passed once; zero failures/errors/skips. `.artifacts/it/review-it-ray259/` |
+
+Each suite selects only
+`test_dataset_projection_prunes_data_sql_and_preserves_values` and
+`test_empty_projection_matches_native_materialization_and_count`, covering four
+split modes and empty/nonempty tables. Runtime JSON, XML summaries and per-file
+hashes are in `.artifacts/projection/review-it-compatibility/`. Docker lifecycle
+logs confirm the project-owned fixture was cleaned after each run. No unchanged
+full protocol or multi-node suite was repeated. Ruff format/lint, diff checks
+and cumulative static self-review passed. Commit, push and remote review state
+are tracked in the local plan.
+
+## Distributed simple predicate conversion
+
+Approved on 2026-10-21 for branch `distributed-simple-predicates`, based on
+`69346ebd35d2eafeca5fa50cea67cbe38428b171`. Extend only the local-conversion
+recognizer for constant-bound BETWEEN, fixed-pattern LIKE and scalar-list IN,
+including NOT and Boolean composition. SQL and bindings remain unchanged.
+Subqueries and GLOBAL IN remain ineligible; the public SELECT-clause rejection
+is retained. No unrelated pushdown worktree is included.
+
+The following table records the initial implementation, before review corrections.
+
+| Suite | Coverage / code state | Reason and overlap | Result |
+| --- | --- | --- | --- |
+| Focused parser unit tests | New grammar and rejection cases plus existing distributed units; Python 3.12 / Ray 2.59 | Development feedback before infrastructure; no database overlap | 147 passed |
+| Final static and unit/contract | Complete unit/contract suite, Ruff, strict mypy and documentation checks | Final short baseline; metadata/logs under `.artifacts/simple-predicates/short-final` | 603 passed, zero skipped; Ruff, strict mypy, documentation, compatibility and release checks passed |
+| Primary combined IT | ClickHouse 26.8.1.2041 / Ray 2.59.0 / Python 3.12.14; complete distributed and integration suites in two-shard/two-replica/three-node topology | One final combined run covers protocol and cluster behavior without separate overlapping runners; fingerprints/logs under `.artifacts/simple-predicates/primary` | 168 passed, zero failures/errors/skips; 175.62 seconds; owned Compose resources and runtime image cleaned |
+| Older baseline 23.3 | ClickHouse 23.3.22.3 / Ray 2.59; new simple-predicate file only | One minimal compatibility run; no repeat of the primary protocol suite; logs under `.artifacts/simple-predicates/ch23.3` | 19 passed, zero failures/errors/skips; 22.74 seconds; owned Compose resources and runtime image cleaned |
+| Older baseline 24.8 | ClickHouse 24.8.14.39 / Ray 2.59; new simple-predicate file only | One minimal compatibility run; no repeat of the primary protocol suite; logs under `.artifacts/simple-predicates/ch24.8` | 19 passed, zero failures/errors/skips; 23.91 seconds; owned Compose resources and runtime image cleaned |
+
+Infrastructure starts only after implementation and static checks stabilize.
+Record source/test/config fingerprints and actual runtime versions before each
+run. Compare complete row multisets with logical reads, including duplicates,
+NULLs, empty results, native casts, escaping and both binding protocols. Query
+logs prove the selected local targets, retained operators and Ray-worker origins.
+Use fixed mirror images, unique Compose projects, existing cleanup traps and
+proxy-free Docker operations. Passed long suites are not repeated on unchanged
+code/configuration/environment. Failed runs retain logs and receive only the
+necessary diagnostic rerun before a final complete suite.
+
+All three initial infrastructure runs passed on their first attempt. Their
+runtime source/test/config fingerprint was identical for that implementation:
+`1284765cd19a8b9748ed59761ab8b1a4c10b358ea6c3d6207bcf8722e921aa3e`.
+The fingerprint excludes Markdown evidence updates. Execution records, actual
+image identities, version records, XML, runner/pytest/Compose logs and cleanup
+evidence remain in the per-baseline artifact directories. The execution index is
+`.artifacts/simple-predicates/summary.json`. Normalized dangling-image inventories
+are unchanged for all three runs; only the owned runtime tags/images were removed.
+
+Reproducible commands from the repository root:
+
+```bash
+.venv/bin/python -m pytest tests/unit tests/contract
+RAY_CLICKHOUSE_CLUSTER_PYTEST_MARKER=integration ./scripts/run_distributed_it.sh tests/distributed tests/integration
+RAY_CLICKHOUSE_IT_IMAGE=docker.m.daocloud.io/clickhouse/clickhouse-server:23.3.22.3 RAY_CLICKHOUSE_IT_BASELINE=23.3.22.3 ./scripts/run_distributed_it.sh tests/distributed/test_simple_predicates.py
+RAY_CLICKHOUSE_IT_IMAGE=docker.m.daocloud.io/clickhouse/clickhouse-server:24.8.14.39 RAY_CLICKHOUSE_IT_BASELINE=24.8.14.39 ./scripts/run_distributed_it.sh tests/distributed/test_simple_predicates.py
+```
+
+Ruff format/lint, strict mypy, documentation/compatibility/release checks, strict
+Sphinx HTML and spelling passed. Static self-review covered the full cumulative
+change, operand categories, complete Boolean recognition, BETWEEN AND boundaries,
+NOT/NULL behavior, quoting and parameter preservation, unsupported forms,
+unchanged topology/security/error handling, meaningful query-log/multiset
+assertions and test resource cleanup. A subsequent full review identified two
+missed defects: percent literals conflicted with internal client bindings, and
+the global ALIAS guard masked negative recognizer tests. The above results are
+retained as initial evidence, not as verification of the corrections below.
+
+## Distributed simple predicate review corrections
+
+The explicit repair request authorizes internal split binding selection in
+`_sql.py`, real-driver regressions in `test_sql.py`, direct parser rejection
+tests and clean-schema resolver controls, and expanded percent-literal IT.
+No dependencies, public signatures or topology/security contracts change.
+
+| Suite | Coverage / state | Reason and overlap | Result |
+| --- | --- | --- | --- |
+| Red regression proof | Real SQL generator and clickhouse-connect binder; internal partition/range constraints plus percent literals | New cases prove the reported failure before the fix; not counted as passing coverage | 36 regressions failed, 10 controls passed; `.artifacts/simple-predicates/review-fix/percent-red.log` |
+| Corrected short suite | Complete unit/contract tests, parser-negative mutation sensitivity, Ruff, strict mypy and docs | Binding helper and tests changed; new complete short baseline | 648 passed, zero skipped; all 37 accept-all mutations detected; Ruff, strict mypy, docs/compatibility/release checks, strict Sphinx and spelling passed |
+| Corrected primary combined IT | ClickHouse 26.8.1.2041 / Ray 2.59, complete distributed and integration suites | Previous 168 passing cases omitted literal-percent/split combinations; one run for changed binding code | 170 passed, 7 failed, zero skipped in 197.39 seconds: three SQL-text log assertions, four transport failures during metadata/client initialization; evidence under `review-fix/primary`, not a passing suite |
+| Corrected older baseline 23.3 | ClickHouse 23.3.22.3 / Ray 2.59, updated simple-predicate file only | Prior 19 cases did not cover the correction; first updated compatibility run, under `review-fix/ch23.3` | 28 passed, zero failures/errors/skips in 39.02 seconds; structured query-log function assertions verified; cleanup completed |
+| Corrected older baseline 24.8 | ClickHouse 24.8.14.39 / Ray 2.59, updated simple-predicate file only | Prior 19 cases did not cover the correction; first updated compatibility run, under `review-fix/ch24.8` | 23 passed, 1 failed, 4 fixture errors, zero skipped in 54.34 seconds; fixture INSERTs explicitly failed with code 241: about 952 MiB required against a 768 MiB server limit; not a passing suite; cleanup completed |
+
+New evidence belongs under `.artifacts/simple-predicates/review-fix/`. Freeze
+runtime code/tests/config before infrastructure; record fingerprints, actual
+versions, commands, XML, logs and exact lifecycle evidence. Reuse dependency and
+Docker caches, unique owned Compose projects and existing cleanup traps. No
+duplicate protocol runner or extra Ray baseline is planned. Complete the final
+cumulative static audit only after the correction evidence is available.
+
+The cumulative static audit found both original findings corrected, with no
+additional production-code defects in scope. SQL-text assertions were replaced
+with structured `used_functions` checks because native parameter substitution
+formats the AST before query logging; complete row-multiset and pinned-origin
+assertions remain. This form passed all 28 cases on 23.3. Packaging/Twine checks
+passed and archive production/test files match the current checkout.
+
+At that intermediate audit, the aggregate result was not PR-ready. The 26.8
+failures were all in the new test file; its 149 unchanged distributed/protocol
+cases passed and remain reusable
+because only new-test assertions/diagnostics subsequently changed. The 24.8
+fixture failures explicitly show server code 241 (`MEMORY_LIMIT_EXCEEDED`), about
+952 MiB required against the 768 MiB configured server limit. This does not prove
+the cause of the earlier 26.8 metadata/client failures from that run.
+The execution index is `.artifacts/simple-predicates/review-fix/summary.json`.
+
+The user explicitly approved the test-profile adjustment and two additional
+feature runs on 2026-10-21. Only the four distributed-test ClickHouse container
+ceilings increase to 2 GiB, with server limits of 1.5 GiB; Keeper and host-wide
+Docker configuration are unchanged. The failed runs above remain historical
+evidence and are not counted as passing suites.
+
+| Suite | Coverage / code state | Reason and overlap | Result |
+| --- | --- | --- | --- |
+| Final primary feature IT | ClickHouse 26.8.1.2041, updated 28-case file, 2 GiB container / 1.5 GiB server profile | One approved rerun after test assertions and memory configuration changed; reuse all 149 unchanged passing primary cases | 28 passed, zero failures/errors/skips in 89.95 seconds; `.artifacts/simple-predicates/review-fix/primary-feature-final` |
+| Final older feature IT | ClickHouse 24.8.14.39, identical 28-case file and memory profile | One approved rerun after explicit code 241 fixture failures; reuse the passing 23.3 suite | 28 passed, zero failures/errors/skips in 47.07 seconds; `.artifacts/simple-predicates/review-fix/ch24.8-final` |
+
+Retain the corrected 648 passing unit/contract cases, static checks and 37/37
+mutation detections because their production/unit inputs are unchanged. Record
+the new runtime fingerprint, effective container/server limits, versions, XML,
+logs and cleanup for each run. No further infrastructure run is authorized.
+
+Both approved reruns used runtime fingerprint
+`247e410226146f836a3998a249987af5f38677ad90fc43f76564170be39c3df6`.
+Docker inspection and each server's preprocessed configuration confirm
+2147483648-byte container ceilings and 1610612736-byte server limits on all
+four ClickHouse nodes for both versions. Keeper remains at 536870912 bytes.
+Normalized dangling-image sets are unchanged, and label-specific checks confirm
+no owned containers, networks, volumes or runtime tags remain after either run.
+
+The final cumulative static review covers the recognizer and Boolean boundaries,
+internal/explicit binding protocols, unsupported forms and fail-closed errors,
+negative-test sensitivity, differential results and actual local Ray origins,
+bounded test resources, documentation and CI collection. Both original findings
+are fixed; no remaining actionable finding was identified. Source and short-test
+files match the already verified package contents byte-for-byte. All requested
+requirements now have implementation and passing evidence in the plan map.
+
+This change meets local PR submission standards. The primary evidence combines
+149 unchanged passing cases with the final 28-case run; it is not represented as
+a new full-suite execution. The earlier 26.8 error causes are not inferred from
+the later passing run. Existing dependency deprecation warnings remain visible.
+The code is uncommitted; remote CI, commit, push and PR publication have not run.
+Final evidence and the static audit are indexed by
+`.artifacts/simple-predicates/review-fix/summary.json` and `final-review.md`.
+
+## PR 22 Ray Jobs readiness correction
+
+The user authorized CI and automatic-review follow-up with verified fixes.
+The first remote 23.3 cluster job failed while contacting `/api/version` at
+Ray Jobs port 8265, before job submission or pytest collection. The Ray head had
+no healthcheck, so Compose `up --wait` required only a running container. Other
+baseline jobs passed; no predicate assertion caused this setup failure.
+
+Add a bounded HTTP healthcheck to the Ray head in `docker/ray/compose.yaml`.
+The existing `up --wait` then waits for the Jobs API before submission. The
+probe uses Python's standard library, a two-second request timeout, a five-second
+Docker timeout, two-second intervals and 60 attempts. No connector code or
+runtime retry contract changes. Directly execute the configured probe in unit
+tests for success/response closure, connection refusal and HTTP 503.
+
+| Suite | Scope / state | Reason and overlap | Result |
+| --- | --- | --- | --- |
+| Readiness regression proof | New three-case configured-probe regression plus two existing CI configuration tests | Prove the missing probe before the correction; no infrastructure execution | Three new cases failed, two controls passed |
+| Corrected CI units and static checks | `tests/unit/test_cluster_ci.py`, YAML and effective Compose configuration | Only the affected test harness changes; reuse unchanged connector/unit/IT evidence | Five cases passed; formatting/lint and static configuration checks recorded under `.artifacts/simple-predicates/pr22-ci` |
+| Final remote PR CI | New head with the readiness configuration; existing Python/Ray, protocol, package and three-server cluster matrix | A push triggers one final CI execution for the changed bootstrap; no local Docker suite or manual repeat of successful jobs | Pending; final head, job results and Greptile evidence belong in the external project plan and `.artifacts/simple-predicates/pr22-ci` |
+
+Greptile found no actionable issue on the initial head, with confidence 5/5.
+Its result and all CI outcomes must be rechecked against the new PR head before
+reporting completion. Failed setup logs and the uploaded Compose evidence are
+retained; setup failure is not reported as a failing predicate test.

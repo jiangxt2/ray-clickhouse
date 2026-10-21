@@ -28,6 +28,12 @@ cases on ClickHouse 26.8; the existing Ray 2.59 server matrix covers the distrib
 suite. Query sources retain Ray-side expression filtering. See the architecture
 section for the inherited `limit().filter()` ordering limitation.
 
+Automatic V1 table-read projection pushdown is enabled on Ray 2.58.0 and 2.59.0
+(including accepted local-build suffixes). Other supported releases retain the
+existing Ray-side column selection behavior. The verified projection contract
+includes column ordering, independent Dataset branches and native empty-projection
+row counts through the public `BlockAccessor` API. Query reads do not opt in.
+
 ## Error hierarchy
 
 All connector exceptions derive from `RayClickHouseError`. Configuration and connection setup use `ConfigurationError`, `AuthenticationError`, `PermissionError`, and `ObjectNotFoundError`. Discovery and conversion use `DiscoveryError` and `SchemaError`. Data-path failures use `TransportError`, `ReadError`, and `WriteError`.

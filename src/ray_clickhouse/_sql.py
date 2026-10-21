@@ -268,7 +268,9 @@ def validate_filter_parameters(
         )
     if unused:
         raise ConfigurationError(f"unused query parameters: {sorted(unused)}")
-    return bool(server_types)
+    # Internal split values must not turn a literal filter into a Python '%'
+    # format string. Preserve the protocol of explicit client-side bindings.
+    return bool(server_types) or (has_internal_parameters and not client_names)
 
 
 def predicate_binding_protocol(

@@ -128,3 +128,44 @@ def test_conversion_fallback_preserves_accepted_filter(cluster_tables):
         .result_rows
     )
     assert queries and any("id >=" in query[0].replace("`", "") for query in queries)
+
+
+@pytest.mark.parametrize("columns", [["txt"], []])
+def test_projected_predicate_keeps_every_local_shard(cluster_tables, columns):
+    tables = cluster_tables
+    base = read_clickhouse(
+        host="clickhouse",
+        database="ray_clickhouse_it",
+        table=tables.distributed,
+        convert_distributed_to_local=True,
+        diagnostic_flush_logs=True,
+    )
+    expected = [row for row in tables.rows if row["id"] >= 28]
+    for branch in (
+        base.filter(expr=col("id") >= 28).select_columns(columns),
+        base.select_columns(["txt", "id"])
+        .filter(expr=col("id") >= 28)
+        .select_columns(columns),
+    ):
+        if columns:
+            assert multiset(branch.take_all()) == multiset(
+                {"txt": row["txt"]} for row in expected
+            )
+        else:
+            assert branch.materialize().count() == len(expected)
+    for index in (0, 2):
+        client = tables.clients[index]
+        client.command("SYSTEM FLUSH LOGS")
+        queries = client.query(
+            "SELECT query FROM system.query_log WHERE type = 'QueryFinish' "
+            "AND is_initial_query = 1 AND startsWith(log_comment, "
+            "'ray-clickhouse operation=read ') AND position(query, %(table)s) > 0",
+            parameters={"table": tables.local},
+        ).result_rows
+        assert queries
+        carrier = "txt" if columns else "id"
+        assert all(
+            query.replace("`", "").startswith(f"SELECT {carrier} FROM")
+            and "id >=" in query.replace("`", "")
+            for (query,) in queries
+        )

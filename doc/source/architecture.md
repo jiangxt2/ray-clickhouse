@@ -6,6 +6,31 @@ Ray owns Dataset execution, task scheduling, and Arrow block handling. ClickHous
 
 The driver discovers schema and engine capabilities and constructs immutable task specifications. Workers create their own ClickHouse clients, stream Arrow batches, or execute inserts. Live clients, sockets, streams, and cursors are never stored in datasource configuration.
 
+## V1 projection pushdown
+
+Verified Ray versions can push Dataset column selections into table scans using
+the public Datasource projection hooks. Each application returns a clone with an
+ordered identity projection, bounded by the explicit source `columns` and earlier
+selections. Renaming and expression evaluation remain Ray operations.
+
+Clones reuse full discovery facts, including range keys, partitions, topology and
+column declarations. Projected output fields are rebuilt from those declarations;
+cached local shard sources are cloned independently. The data-query projection
+and ReadTask schema agree on order, type and nullability. Original source facts
+are never narrowed to the output schema.
+
+An empty projection reads one permitted source column, validates and slices the
+Arrow stream normally, then uses the public Ray BlockAccessor selection method to
+retain native cardinality across materialization. Its physical row placeholder
+is managed by Ray; the connector neither imports its private implementation nor
+copies its private column name. No COUNT query or alternate empty-row semantics
+are introduced. The generator closes its underlying stream on early termination
+and failure, as well as normal completion.
+
+Schema discovery still precedes Dataset optimization. This optimization does not
+avoid unsupported source-schema errors, rewrite query-mode SQL, or provide a
+database snapshot across requests.
+
 ## Read path
 
 The default `split="single"` path executes one ClickHouse data query without COUNT, size, or sample planning queries. Optional partition and integer-range splits apply only to validated local MergeTree-family tables. Views are single-query-only; Distributed tables use a single query unless the filtered local-read option is enabled; MaterializedView is outside the public profile.
@@ -33,6 +58,10 @@ Each complete predicate offered by Ray is accepted or rejected. Rejection return
 the original datasource unchanged, preserving the Ray Filter. Acceptance creates
 an independent datasource with accumulated predicates and clears all split,
 Distributed-target and fallback caches. Only immutable schema facts are reused.
+The current output projection is retained by predicate clones. New expressions
+are checked against its visible fields, including an empty selection. A predicate
+accepted before projection keeps its source-column dependencies even when those
+columns are absent from the output; full discovery facts are never narrowed.
 Ray's own residual splitting remains Ray's responsibility; the connector never
 accepts just one child of a rejected Boolean expression.
 
@@ -132,6 +161,27 @@ SQL filter or accepted native predicate can resolve to one fixed replica of ever
 shard. Ordinary Views remain
 logical queries. Global ordering, query sources, nested Distributed targets,
 functions and unsupported contexts are outside this conversion profile.
+
+The predicate recognizer accepts the existing scalar comparisons and NULL tests,
+plus column BETWEEN constant bounds, string-column LIKE fixed patterns, and
+column IN nonempty scalar constant lists, including their NOT forms. Constants
+may use the existing scalar value-binding protocols. Boolean composition must
+be recognized in full; an unsupported branch makes the entire filter ineligible.
+The AND inside BETWEEN belongs to that predicate, independently of surrounding
+Boolean AND/OR operators. LIKE accepts String/FixedString and their supported
+Nullable/LowCardinality wrappers. A bound pattern is constant for the query;
+ClickHouse validates its actual type.
+
+SQL and bindings are passed through unchanged: IN lists are not expanded to OR,
+BETWEEN is not rewritten, and LIKE matching is never evaluated in Python.
+When a filter has no client-side placeholders, generated partition/range values
+use native bindings. Internal constraints therefore cannot make literal `%` or
+`%(name)s` text inside quoted strings undergo Python formatting. Explicit client
+bindings keep their existing protocol, and quoted native-placeholder lookalikes
+remain rejected when parameters are bound.
+Subqueries, GLOBAL IN, external sets, tuple/array list forms, column/function
+patterns, ILIKE and custom ESCAPE clauses do not qualify. The existing public
+filter validator rejects SELECT subqueries before conversion is attempted.
 
 The driver reads field names and declarations separately on the entry node and
 each selected replica. It uses explicit projections and named result mapping:

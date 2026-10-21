@@ -235,6 +235,33 @@ def test_columns_context_and_binding_rejection_do_not_mutate_source():
         assert source._planning_snapshot is None and source._pushed_predicate is None
 
 
+def test_predicate_clones_preserve_projection_and_full_source_facts():
+    source = make_source()
+    full = schema()
+    source._planning_snapshot = DiscoverySnapshot(full, "MergeTree")
+    with patch(
+        "ray_clickhouse.datasource.discover_predicate_context", return_value=True
+    ):
+        projected = source.apply_projection({"id": "id"})
+        filtered = projected.apply_predicate(col("id") >= 3)
+        assert filtered is not projected
+        assert filtered.get_projection_map() == {"id": "id"}
+        assert filtered._planning_snapshot is None
+        assert filtered._predicate_schema is full
+        assert filtered._predicate_schema.arrow_schema.names == ["id", "txt", "flag"]
+        assert projected._planning_snapshot is source._planning_snapshot
+        assert projected.get_current_predicate() is None
+        assert source.get_projection_map() is None
+        empty = source.apply_projection({})
+        assert empty.apply_predicate(col("id") > 0) is empty
+        assert projected.apply_predicate(col("txt") == "hidden") is projected
+    with patch("ray_clickhouse.datasource.discover_engine", return_value="MergeTree"):
+        narrowed = filtered.apply_projection({})
+        assert narrowed.get_current_predicate() is filtered.get_current_predicate()
+        assert narrowed._planning_snapshot.schema is full
+        assert narrowed.get_projection_map() == {}
+
+
 def test_context_errors_propagate_and_range_discovery_receives_the_predicate():
     source = make_source(split="range", range_column="id")
     with (

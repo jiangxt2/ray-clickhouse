@@ -284,6 +284,50 @@ def test_server_limit_preserves_ray_residual(
     )
 
 
+@pytest.mark.parametrize("columns", [["txt"], []])
+@pytest.mark.parametrize("split", ["single", "range"])
+def test_projection_and_predicate_share_filtered_source_facts(
+    predicate_table, connection_options, table_name, clickhouse_client, columns, split
+):
+    options = {"range_column": "id"} if split == "range" else {}
+    base = read_clickhouse(
+        **connection_options,
+        table=table_name,
+        split=split,
+        target_tasks=3,
+        diagnostic_flush_logs=True,
+        **options,
+    )
+    reference = predicate_table.filter((col("id") >= 5).to_pyarrow())
+    for branch in (
+        base.filter(expr=col("id") >= 5).select_columns(columns),
+        base.select_columns(["txt", "id"])
+        .filter(expr=col("id") >= 5)
+        .select_columns(columns),
+    ):
+        if columns:
+            assert multiset(branch.take_all()) == multiset(
+                reference.select(columns).to_pylist()
+            )
+        else:
+            assert branch.materialize().count() == reference.num_rows
+    clickhouse_client.command("SYSTEM FLUSH LOGS")
+    queries = clickhouse_client.query(
+        "SELECT query FROM system.query_log WHERE type = 'QueryFinish' "
+        "AND startsWith(log_comment, 'ray-clickhouse operation=read ') "
+        "AND position(query, %(table)s) > 0",
+        parameters={"table": table_name},
+    ).result_rows
+    assert queries
+    carrier = "txt" if columns else "id"
+    assert all(
+        query.replace("`", "").startswith(f"SELECT {carrier} FROM")
+        and "id >=" in query.replace("`", "")
+        for (query,) in queries
+    )
+    assert base.count() == predicate_table.num_rows
+
+
 def _assert_capped_read(clickhouse_client, connection_options, table_name, settings):
     db = connection_options["database"]
     clickhouse_client.command(

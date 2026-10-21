@@ -1,4 +1,5 @@
 import pytest
+from clickhouse_connect.driver.binding import bind_query
 
 from ray_clickhouse._errors import ConfigurationError
 from ray_clickhouse._models import QualifiedTable
@@ -110,3 +111,70 @@ def test_columns_are_normalized_and_validated() -> None:
         normalize_columns(["id", "id"])
     with pytest.raises(ConfigurationError):
         normalize_columns(["id` OR 1=1"])
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        "txt LIKE 'row-%'",
+        "txt NOT LIKE 'row-%'",
+        r"txt LIKE '100\\%'",
+        r"txt LIKE 'a\\%%'",
+        "txt IN ('100%', '%s', '%(literal)s')",
+        "txt NOT IN ('100%', '%s', '%(literal)s')",
+        "txt BETWEEN 'a%' AND 'z'",
+        "txt NOT BETWEEN 'a%' AND 'z'",
+        "txt = '%(literal)s'",
+    ],
+)
+@pytest.mark.parametrize(
+    "constraints",
+    [
+        {"partition_ids": ("p0", "p'1%")},
+        {"range_column": "id", "range_lower": -3},
+        {"range_column": "id", "range_upper": 2**64},
+        {"range_column": "id", "range_lower": 0, "range_upper": 10},
+    ],
+)
+def test_internal_split_bindings_preserve_literal_percent_sql(predicate, constraints):
+    sql, parameters = build_select(
+        table=QualifiedTable("analytics", "events"),
+        columns=("id", "txt"),
+        filter_sql=predicate,
+        **constraints,
+    )
+    bound_sql, bindings = bind_query(sql, dict(parameters))
+    assert bound_sql == sql
+    assert f"({predicate})" in bound_sql
+    assert set(bindings) == {f"param_{name}" for name, _ in parameters}
+    assert bindings
+
+
+@pytest.mark.parametrize(
+    "predicate,parameters,native",
+    [
+        ("txt LIKE %(pattern)s", {"pattern": "row-%"}, False),
+        ("txt LIKE {pattern:String}", {"pattern": "row-%"}, True),
+        (None, None, False),
+    ],
+)
+def test_explicit_binding_protocols_and_unfiltered_splits_are_preserved(
+    predicate, parameters, native
+):
+    sql, values = build_select(
+        table=QualifiedTable("analytics", "events"),
+        columns=("id", "txt"),
+        filter_sql=predicate,
+        parameters=parameters,
+        partition_ids=("p0",),
+    )
+    bound_sql, bindings = bind_query(sql, dict(values))
+    if native:
+        assert bound_sql == sql
+        assert bindings["param_pattern"] == "row-%"
+        assert bindings["param___ray_clickhouse_partition_0"] == "p0"
+    else:
+        assert not bindings
+        assert "`_partition_id` IN ('p0')" in bound_sql
+        if predicate is not None:
+            assert "txt LIKE 'row-%'" in bound_sql

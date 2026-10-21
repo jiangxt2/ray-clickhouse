@@ -1,6 +1,6 @@
 <clickhouse>
   <listen_host>0.0.0.0</listen_host>
-  <max_server_memory_usage>805306368</max_server_memory_usage>
+  <max_server_memory_usage>1610612736</max_server_memory_usage>
   <access_control_improvements>
     <select_from_system_db_requires_grant>true</select_from_system_db_requires_grant>
   </access_control_improvements>

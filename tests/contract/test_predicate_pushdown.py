@@ -13,7 +13,11 @@ from ray.data.datasource import Datasource
 from ray.data.datatype import DataType
 from ray.data.expressions import col, udf
 
-from ray_clickhouse._compat import make_read_task, supports_predicate_pushdown
+from ray_clickhouse._compat import (
+    empty_projection,
+    make_read_task,
+    supports_predicate_pushdown,
+)
 from ray_clickhouse._models import ClickHouseConnection, QualifiedTable
 from ray_clickhouse._schema import SchemaPlan, TargetColumn
 from ray_clickhouse.datasource import ClickHouseDatasource, ClickHouseReadConfig
@@ -27,7 +31,7 @@ def _late_id(values):
 
 
 class _ContractSource(Datasource):
-    """Use real connector hooks, replacing only the external database data plane."""
+    """Use real connector hooks with deterministic data and discovery fixtures."""
 
     def __init__(self, source, observations):
         super().__init__()
@@ -52,12 +56,30 @@ class _ContractSource(Datasource):
     def estimate_inmemory_data_size(self):
         return None
 
+    def supports_projection_pushdown(self):
+        return self.source.supports_projection_pushdown()
+
+    def get_projection_map(self):
+        return self.source.get_projection_map()
+
+    def apply_projection(self, projection_map):
+        return _ContractSource(
+            self.source.apply_projection(projection_map), self.observations
+        )
+
     def get_read_tasks(self, parallelism, per_task_row_limit=None, data_context=None):
         del parallelism, data_context
         table = pa.table({"id": list(range(20)), "value": [None, 1, 2, 3] * 5})
         predicate = self.source.get_current_predicate()
         if predicate is not None:
             table = table.filter(predicate.to_pyarrow())
+        projection = self.source.get_projection_map()
+        if projection is not None:
+            table = (
+                table.select(list(projection))
+                if projection
+                else empty_projection(table)
+            )
 
         def read() -> Iterable[pa.Table]:
             yield table
@@ -66,7 +88,7 @@ class _ContractSource(Datasource):
             make_read_task(
                 read,
                 BlockMetadata(None, None, None, None),
-                table.schema,
+                self.source.arrow_schema,
                 per_task_row_limit,
             )
         ]
@@ -87,6 +109,7 @@ def native_dataset():
     observed = []
     with (
         patch("ray_clickhouse.datasource.discover_schema", return_value=plan),
+        patch("ray_clickhouse.datasource.discover_engine", return_value="MergeTree"),
         patch(
             "ray_clickhouse.datasource.discover_predicate_context", return_value=True
         ),
@@ -142,3 +165,27 @@ def test_ray_inherited_limit_filter_behavior_is_characterized_separately(
     # support. This explicitly records inherited behavior, not authored order.
     result = base.limit(2).filter(expr=col("id") >= 17).take_all()
     assert len(result) == 2 and all(row["id"] >= 17 for row in result)
+
+
+@pytest.mark.parametrize("columns", [["value"], ["id"], []])
+def test_native_projection_and_predicate_composition(native_dataset, columns):
+    base, _ = native_dataset
+    reference = (
+        ray.data.from_arrow(
+            pa.table({"id": list(range(20)), "value": [None, 1, 2, 3] * 5})
+        )
+        .filter(expr=col("id") >= 12)
+        .select_columns(columns)
+        .materialize()
+    )
+    for branch in (
+        base.filter(expr=col("id") >= 12).select_columns(columns),
+        base.select_columns(["value", "id"])
+        .filter(expr=col("id") >= 12)
+        .select_columns(columns),
+    ):
+        result = branch.materialize()
+        assert result.take_all() == reference.take_all()
+        assert result.count() == reference.count()
+        assert result.schema().names == reference.schema().names
+    assert base.count() == 20
