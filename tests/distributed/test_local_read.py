@@ -91,6 +91,44 @@ def test_cached_plan_regroups_and_task_row_limit(cluster_tables):
     assert len(rows) > 3
 
 
+@pytest.mark.parametrize("split", ["single", "partition", "range", "auto"])
+@pytest.mark.parametrize("columns", [["id"], []])
+def test_dataset_projection_reaches_cached_shards(cluster_tables, split, columns):
+    from ray_clickhouse._compat import supports_v1_projection_pushdown
+
+    datasource = source(
+        cluster_tables,
+        split=split,
+        **({"range_column": "value"} if split == "range" else {}),
+    )
+    datasource.get_read_tasks(4)
+    children = datasource._local_sources
+    original_schemas = [child.arrow_schema for child in children]
+    original_maps = [child.get_projection_map() for child in children]
+    dataset = ray.data.read_datasource(datasource, override_num_blocks=4, concurrency=2)
+    result = dataset.select_columns(columns).materialize()
+    expected = [
+        row for row in cluster_tables.rows if row["value"] is None or row["value"] >= 9
+    ]
+    reference = ray.data.from_items(expected).select_columns(columns).materialize()
+    assert result.count() == reference.count()
+    assert multiset(result.take_all()) == multiset(reference.take_all())
+    assert [child.arrow_schema for child in children] == original_schemas
+    assert [child.get_projection_map() for child in children] == original_maps
+    for client in (cluster_tables.clients[0], cluster_tables.clients[2]):
+        client.command("SYSTEM FLUSH LOGS")
+        queries = client.query(
+            "SELECT query FROM system.query_log WHERE type = 'QueryFinish' "
+            "AND is_initial_query = 1 "
+            "AND startsWith(log_comment, 'ray-clickhouse operation=read ') "
+            "AND position(query, %(table)s) > 0",
+            parameters={"table": cluster_tables.local},
+        ).result_rows
+        assert queries
+        if supports_v1_projection_pushdown():
+            assert all(row[0].startswith("SELECT `id` FROM") for row in queries)
+
+
 @pytest.mark.parametrize(
     "options",
     [

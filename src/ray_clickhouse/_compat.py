@@ -9,7 +9,7 @@ from typing import Any
 
 import pyarrow as pa
 import ray
-from ray.data.block import BlockMetadata
+from ray.data.block import BlockAccessor, BlockMetadata
 from ray.data.datasource import ReadTask
 
 from ray_clickhouse._errors import ConfigurationError
@@ -18,6 +18,23 @@ _MIN_RAY = (2, 55, 0)
 _MAX_RAY = (2, 60, 0)
 _RAY_VERSION = ray.__version__
 _FINAL = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\+[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*)?$")
+
+
+def supports_v1_projection_pushdown() -> bool:
+    """Enable only the verified V1 projection and empty-block contracts."""
+    match = _FINAL.fullmatch(_RAY_VERSION)
+    return match is not None and tuple(int(p) for p in match.groups()) in {
+        (2, 58, 0),
+        (2, 59, 0),
+    }
+
+
+def empty_projection(table: pa.Table) -> pa.Table:
+    """Use Ray's public accessor to retain its native row-count placeholder."""
+    result = BlockAccessor.for_block(table).select([])
+    if not isinstance(result, pa.Table):
+        raise ConfigurationError("Ray empty projection did not return an Arrow table")
+    return result
 
 
 def ensure_supported_ray_version() -> None:

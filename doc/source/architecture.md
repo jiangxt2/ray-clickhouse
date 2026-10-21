@@ -6,6 +6,31 @@ Ray owns Dataset execution, task scheduling, and Arrow block handling. ClickHous
 
 The driver discovers schema and engine capabilities and constructs immutable task specifications. Workers create their own ClickHouse clients, stream Arrow batches, or execute inserts. Live clients, sockets, streams, and cursors are never stored in datasource configuration.
 
+## V1 projection pushdown
+
+Verified Ray versions can push Dataset column selections into table scans using
+the public Datasource projection hooks. Each application returns a clone with an
+ordered identity projection, bounded by the explicit source `columns` and earlier
+selections. Renaming and expression evaluation remain Ray operations.
+
+Clones reuse full discovery facts, including range keys, partitions, topology and
+column declarations. Projected output fields are rebuilt from those declarations;
+cached local shard sources are cloned independently. The data-query projection
+and ReadTask schema agree on order, type and nullability. Original source facts
+are never narrowed to the output schema.
+
+An empty projection reads one permitted source column, validates and slices the
+Arrow stream normally, then uses the public Ray BlockAccessor selection method to
+retain native cardinality across materialization. Its physical row placeholder
+is managed by Ray; the connector neither imports its private implementation nor
+copies its private column name. No COUNT query or alternate empty-row semantics
+are introduced. The generator closes its underlying stream on early termination
+and failure, as well as normal completion.
+
+Schema discovery still precedes Dataset optimization. This optimization does not
+avoid unsupported source-schema errors, rewrite query-mode SQL, or provide a
+database snapshot across requests.
+
 ## Read path
 
 The default `split="single"` path executes one ClickHouse data query without COUNT, size, or sample planning queries. Optional partition and integer-range splits apply only to validated local MergeTree-family tables. Views are single-query-only; Distributed tables use a single query unless the filtered local-read option is enabled; MaterializedView is outside the public profile.
