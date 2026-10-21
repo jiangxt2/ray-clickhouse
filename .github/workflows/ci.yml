@@ -234,6 +234,36 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  predicate-ray258-it:
+    name: Ray 2.58 predicate integration
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.candidate.outputs.sha }}
+      - name: Run predicate protocol and Distributed compatibility
+        run: >-
+          ./scripts/run_distributed_it.sh
+          tests/integration/test_predicate_pushdown.py
+          tests/distributed/test_predicate_pushdown.py
+        env:
+          RAY_CLICKHOUSE_IT_BASELINE: predicate-ray258
+          RAY_CLICKHOUSE_CLUSTER_PYTEST_MARKER: integration
+          RAY_CLICKHOUSE_RAY_BASE_SOURCE: docker.m.daocloud.io/rayproject/ray@sha256:c3c9573c5c6bfe4127885f79622d6a32064d34cafc7d156ec728aab8657be250
+          RAY_CLICKHOUSE_RAY_BASE_LOCAL_IMAGE: ray-clickhouse-ray-base:2.58.0-py312-c3c9573c5c6b
+          RAY_CLICKHOUSE_CLUSTER_IT_ARTIFACT_DIR: artifacts/it/predicate-ray258
+      - name: Upload predicate compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ray-2.58-predicate-integration
+          path: artifacts/it/predicate-ray258
+          if-no-files-found: error
+          retention-days: 90
+
   package-build:
     name: Build package
     needs: candidate
@@ -330,7 +360,7 @@ jobs:
       github.workflow_ref ==
       'jiangxt2/ray-clickhouse/.github/workflows/ci.yml@refs/heads/master' &&
       needs.candidate.outputs.formal == 'true'
-    needs: [candidate, unit, quality, docs, docs-linkcheck, clickhouse-it, ray-cluster-it, package-build, package-smoke]
+    needs: [candidate, unit, quality, docs, docs-linkcheck, clickhouse-it, ray-cluster-it, predicate-ray258-it, package-build, package-smoke]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

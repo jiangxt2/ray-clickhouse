@@ -5,7 +5,10 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ray_clickhouse._predicates import CompiledPredicate
 
 import pyarrow as pa
 
@@ -80,6 +83,156 @@ _SORTING_IDENTIFIER = r"(?:[A-Za-z_][A-Za-z0-9_]*|`[A-Za-z_][A-Za-z0-9_]*`)"
 _SORTING_COLUMNS = re.compile(
     rf"{_SORTING_IDENTIFIER}(?:\s*,\s*{_SORTING_IDENTIFIER})*"
 )
+
+_PREDICATE_REQUIRED_SETTINGS = {
+    "final": "0",
+    "max_result_rows": "0",
+    "max_result_bytes": "0",
+    "limit": "0",
+    "offset": "0",
+    "additional_result_filter": "",
+    "additional_table_filters": "{}",
+    "read_overflow_mode": "throw",
+    "timeout_overflow_mode": "throw",
+    "group_by_overflow_mode": "throw",
+    "sort_overflow_mode": "throw",
+}
+# These query-rewriting settings are absent on older supported servers.
+_PREDICATE_OPTIONAL_SETTINGS = {
+    "page": "0",
+    "select": "",
+    "filter": "",
+    "order": "",
+    "sort": "",
+}
+_PREDICATE_NEUTRAL_SETTINGS = {
+    **_PREDICATE_REQUIRED_SETTINGS,
+    **_PREDICATE_OPTIONAL_SETTINGS,
+}
+_ZERO_SETTING = re.compile(r"[+-]?(?:0+(?:\.0*)?|\.0+)(?:[eE][+-]?[0-9]+)?")
+_NEUTRAL_PREDICATE_AST = (
+    "SelectWithUnionQuery (children 1)",
+    "ExpressionList (children 1)",
+    "SelectQuery (children 1)",
+    "ExpressionList (children 1)",
+    "Literal UInt64_1",
+)
+
+
+def _explicit_predicate_settings_are_neutral(connection: ClickHouseConnection) -> bool:
+    defaults = dict(connection.client_options).get("settings", {})
+    if not isinstance(defaults, Mapping):
+        return False
+    explicit = {**defaults, **dict(connection.settings)}
+    for name, expected in _PREDICATE_NEUTRAL_SETTINGS.items():
+        if name not in explicit:
+            continue
+        value = explicit[name]
+        if expected == "0":
+            if isinstance(value, (int, float)) and value == 0:
+                continue
+            if isinstance(value, str) and _ZERO_SETTING.fullmatch(value.strip()):
+                continue
+            return False
+        if name == "additional_table_filters" and isinstance(value, Mapping):
+            if not value:
+                continue
+            return False
+        if not isinstance(value, str) or value != expected:
+            return False
+    return True
+
+
+def _predicate_context_query() -> str:
+    # Only fixed internal names/values enter this SQL. Aggregate on the server so
+    # a usable one-row/low-byte result cap cannot be exhausted by settings rows.
+    names = ", ".join(f"'{name}'" for name in _PREDICATE_NEUTRAL_SETTINGS)
+    required = ", ".join(f"'{name}'" for name in _PREDICATE_REQUIRED_SETTINGS)
+    neutral = " OR ".join(
+        f"(name = '{name}' AND value = '{value}')"
+        for name, value in _PREDICATE_NEUTRAL_SETTINGS.items()
+    )
+    return (
+        "SELECT toUInt8(multiIf(count() != uniqExact(name), 2, "
+        f"countIf(name IN ({required})) != {len(_PREDICATE_REQUIRED_SETTINGS)}, 0, "
+        f"countIf(NOT ({neutral})) != 0, 0, 1)) AS predicate_context "
+        f"FROM system.settings WHERE name IN ({names})"
+    )
+
+
+def _predicate_ast_is_neutral(result: Any) -> bool:
+    if not isinstance(result, bytes):
+        raise DiscoveryError("malformed predicate context AST response")
+    try:
+        lines = result.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        # A non-text default output format cannot establish the known AST.
+        return False
+    # Compare only the fixed constant probe, never user SQL or source-table ASTs.
+    # Unknown server formatting disables optimization instead of widening trust.
+    return tuple(line.strip() for line in lines) == _NEUTRAL_PREDICATE_AST
+
+
+def discover_predicate_context(
+    connection: ClickHouseConnection, limits: ResourceLimits
+) -> bool:
+    """Reject optimization under effective result truncation or implicit rewrites."""
+    if not _explicit_predicate_settings_are_neutral(connection):
+        return False
+    client = _open(connection, limits)
+    failed = False
+    try:
+        settings, transport = _query_context(connection, limits, "predicate-context")
+        result = client.query(
+            _predicate_context_query(),
+            settings=settings,
+            transport_settings=transport,
+        )
+        rows = result.result_rows
+        if tuple(result.column_names) != ("predicate_context",):
+            raise DiscoveryError("malformed predicate context metadata")
+        # An inherited offset/filter can suppress even this single aggregate row.
+        if not rows:
+            return False
+        if (
+            len(rows) != 1
+            or len(rows[0]) != 1
+            or type(rows[0][0]) is not int
+            or rows[0][0] not in (0, 1)
+        ):
+            raise DiscoveryError("malformed predicate context metadata")
+        if rows[0][0] == 0:
+            return False
+        # ClickHouse can materialize inherited limit/offset into a SELECT wrapper
+        # and clear their context values before system.settings is read. EXPLAIN
+        # preserves that wrapper without executing or optimizing a source query.
+        settings, transport = _query_context(connection, limits, "predicate-shape")
+        return _predicate_ast_is_neutral(
+            # query() appends FORMAT Native, which EXPLAIN AST consumes as part
+            # of its inner query. raw_query() preserves this fixed probe verbatim.
+            client.raw_query(
+                "EXPLAIN AST SELECT 1",
+                fmt=None,
+                settings=settings,
+                transport_settings=transport,
+            )
+        )
+    except RayClickHouseError:
+        failed = True
+        raise
+    except BaseException as exc:
+        failed = True
+        if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
+            raise
+        raise _translate(exc, operation="predicate context discovery") from None
+    finally:
+        try:
+            client.close()
+        except Exception:
+            if not failed:
+                raise TransportError(
+                    "failed to close predicate context client"
+                ) from None
 
 
 def _is_integer_range_column(column: TargetColumn) -> bool:
@@ -456,6 +609,7 @@ def discover_range_facts(
     column: TargetColumn,
     filter_sql: str | None,
     parameters: Mapping[str, Any] | None,
+    pushed_predicate: CompiledPredicate | None = None,
 ) -> RangeFacts:
     if not _is_integer_range_column(column):
         raise DiscoveryError("range split currently supports integer columns only")
@@ -467,6 +621,7 @@ def discover_range_facts(
             columns=(column.name,),
             filter_sql=validate_filter(filter_sql),
             parameters=parameters,
+            pushed_predicate=pushed_predicate,
         )
         # Reuse the validated table/filter renderer without parsing user SQL text.
         prefix = f"SELECT `{column.name}` FROM {table.sql()}"

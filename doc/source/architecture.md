@@ -37,6 +37,83 @@ The default `split="single"` path executes one ClickHouse data query without COU
 
 Reads yield bounded Arrow blocks controlled by `batch_rows` and `batch_bytes`. A single indivisible oversized row can exceed the byte target. Multiple independent read tasks do not share a ClickHouse snapshot.
 
+### Native predicate pushdown
+
+Verified Ray 2.58.0 and 2.59.0 table datasources implement the native predicate
+acceptance contract. Ray nodes are decoded only in `_compat.py` into immutable
+connector nodes. A pure compiler validates the source declaration, Arrow field,
+literal type and range before producing bound SQL. There is no private Ray
+runtime import or SQL parsing of expression repr strings.
+
+The initial profile is exact Int8/16/32/64 and UInt8/16/32 comparisons to integer
+constants, Bool predicates, String equality/inequality, NULL tests and complete
+AND/OR/NOT. Verified Nullable and LowCardinality wrappers retain three-valued
+logic. UInt64 comparisons to Python integers remain residual because Arrow 19
+casts these comparisons to Int64 and can fail on high column values; NULL tests
+do not introduce that cast. Float/NaN, Decimal, timezones, casted logical types,
+IN/NOT IN, arithmetic, UDFs, column-to-column comparisons and unknown nodes remain
+in Ray. Missing or unselected columns are never silently added to the read.
+
+Each complete predicate offered by Ray is accepted or rejected. Rejection returns
+the original datasource unchanged, preserving the Ray Filter. Acceptance creates
+an independent datasource with accumulated predicates and clears all split,
+Distributed-target and fallback caches. Only immutable schema facts are reused.
+The current output projection is retained by predicate clones. New expressions
+are checked against its visible fields, including an empty selection. A predicate
+accepted before projection keeps its source-column dependencies even when those
+columns are absent from the output; full discovery facts are never narrowed.
+Ray's own residual splitting remains Ray's responsibility; the connector never
+accepts just one child of a rejected Boolean expression.
+
+Caller SQL and parameters are validated separately from compiler-owned bindings.
+Generated names use a reserved expression namespace. With no caller placeholders,
+the compiler uses native typed binding; otherwise it follows the caller's native
+or client protocol without mixing protocols or rewriting caller SQL. Ambiguous
+placeholder-looking SQL retains its existing behavior without expression pushdown.
+The same effective predicate and bindings reach range discovery, single scans,
+partition/range constraints and every resolved local shard. Compiler values are
+not included in repr or connector diagnostics.
+
+Before acceptance, effective settings must exclude FINAL, implicit table/result
+filters, result row/byte caps, server `limit/offset`, query-rewriting
+`page/select/filter/order/sort` settings where available, and partial-result
+overflow modes. Explicit client defaults and request settings are checked first
+(request settings take precedence), without changing the caller's configuration.
+The effective server context is then checked with a single-row UInt8 aggregate,
+so the probe does not materialize all settings under a small result cap. Missing
+required controls or a suppressed aggregate row reject the optimization; optional
+newer controls need not exist on older servers. Only after a safe aggregate, a
+fixed `EXPLAIN AST SELECT 1` probe under the original settings and a fresh query id
+must match the known neutral AST. This detects inherited limit/offset already
+materialized into a query wrapper and cleared from the settings context. Extra
+nodes, wrappers or unfamiliar valid AST formatting leave the predicate in Ray.
+The probe never explains user SQL or a source table. Authentication, permission,
+malformed metadata and transport errors remain visible. This adds context
+metadata only when attempting a supported expression; it adds no source-table
+COUNT, sample or size query to a single read.
+Schema and effective context are not transactionally pinned; source schema and
+query/security configuration must remain stable during the planned read.
+
+The fixed AST probe uses the driver's public raw-query API without appending a
+FORMAT clause: EXPLAIN AST can consume such a clause as part of its inner query.
+Only the known text response enables optimization. A different default output
+format conservatively retains the Ray predicate; result controls are unchanged.
+
+Distributed conversion is independent of predicate acceptance. Accepted expressions
+can make an otherwise unfiltered source eligible for opt-in #20 local scans.
+Conversion still validates every required capability and security context. A
+planning fallback retains the accepted predicate on one logical-source query.
+There is no fallback after output begins, replica failover or new shard-routing
+algorithm. Views remain single queries, global ordering keeps logical reading,
+and query sources do not implement this optimization.
+
+Residual filtering remains before a downstream limit; read tasks must not truncate
+raw rows before that residual. The existing per-task budget remains shared across
+grouped local scans. Separately, Ray 2.58/2.59 mark Limit as predicate-pass-through,
+so `limit().filter(expr=...)` may be reordered by Ray even when the datasource
+rejects pushdown. This inherited behavior is characterized, not repaired here;
+strict authored-order semantics require an upstream change.
+
 ### Automatic range planning
 
 `split="auto"` explicitly opts into range planning on a validated direct
@@ -80,7 +157,8 @@ maximum-plus-one boundaries. The caller's parameter types are preserved.
 
 `convert_distributed_to_local=False` preserves the existing path without new
 cluster queries. When enabled, a Distributed table with an explicit eligible
-filter can resolve to one fixed replica of every shard. Ordinary Views remain
+SQL filter or accepted native predicate can resolve to one fixed replica of every
+shard. Ordinary Views remain
 logical queries. Global ordering, query sources, nested Distributed targets,
 functions and unsupported contexts are outside this conversion profile.
 

@@ -13,9 +13,12 @@ from ray.data.block import BlockMetadata
 from ray.data.datasource import Datasource, ReadTask
 
 from ray_clickhouse._compat import (
+    combine_predicates,
+    decode_predicate,
     empty_projection,
     ensure_supported_ray_version,
     make_read_task,
+    supports_predicate_pushdown,
     supports_v1_projection_pushdown,
 )
 from ray_clickhouse._discovery import (
@@ -25,6 +28,7 @@ from ray_clickhouse._discovery import (
     RangeFacts,
     discover_engine,
     discover_partitions,
+    discover_predicate_context,
     discover_range_facts,
     discover_schema,
     discover_sorting_key,
@@ -47,8 +51,18 @@ from ray_clickhouse._models import (
     validate_identifier,
 )
 from ray_clickhouse._planning import group_partitions, plan_integer_ranges
+from ray_clickhouse._predicates import (
+    CompiledPredicate,
+    PredicateNode,
+    compile_predicate,
+)
 from ray_clickhouse._schema import SchemaPlan, render_read_projection
-from ray_clickhouse._sql import build_select, validate_filter_parameters
+from ray_clickhouse._sql import (
+    build_select,
+    effective_filter,
+    predicate_binding_protocol,
+    validate_filter_parameters,
+)
 from ray_clickhouse._transport import stream_query
 
 
@@ -129,6 +143,59 @@ class ClickHouseDatasource(Datasource):
         self._resolved_distributed: ResolvedDistributed | None = None
         self._local_sources: tuple[ClickHouseDatasource, ...] = ()
         self._logical_fallback = False
+        self._predicate_node: PredicateNode | None = None
+        self._pushed_predicate: CompiledPredicate | None = None
+        self._predicate_schema: SchemaPlan | None = None
+        self._predicate_expr: Any = None
+
+    def supports_predicate_pushdown(self) -> bool:
+        return supports_predicate_pushdown()
+
+    def get_current_predicate(self) -> Any:
+        return self._predicate_expr
+
+    def apply_predicate(self, predicate_expr: Any) -> ClickHouseDatasource:
+        """Accept a complete expression on an independent plan, or preserve identity."""
+        decoded = decode_predicate(predicate_expr)
+        if decoded is None:
+            return self
+        config = self._config
+        protocol = predicate_binding_protocol(
+            config.filter_sql, dict(config.query_parameters)
+        )
+        if protocol is None:
+            return self
+        schema = (
+            self._planning_snapshot.schema
+            if self._planning_snapshot is not None
+            else self._predicate_schema
+        )
+        if schema is None:
+            schema = discover_schema(config.connection, config.table, config.limits)
+        selected = self._projection_columns
+        if selected is None:
+            selected = config.columns or tuple(schema.arrow_schema.names)
+        selected_schema = SchemaPlan(
+            pa.schema([schema.arrow_schema.field(name) for name in selected]),
+            tuple(column for column in schema.columns if column.name in selected),
+        )
+        combined = (
+            PredicateNode("and", (self._predicate_node, decoded))
+            if self._predicate_node is not None
+            else decoded
+        )
+        compiled = compile_predicate(combined, selected_schema, native=protocol)
+        if compiled is None:
+            return self
+        if not discover_predicate_context(config.connection, config.limits):
+            return self
+        clone = ClickHouseDatasource(config)
+        clone._projection_columns = self._projection_columns
+        clone._predicate_node = combined
+        clone._pushed_predicate = compiled
+        clone._predicate_schema = schema
+        clone._predicate_expr = combine_predicates(self._predicate_expr, predicate_expr)
+        return clone
 
     @property
     def config(self) -> ClickHouseReadConfig:
@@ -179,21 +246,26 @@ class ClickHouseDatasource(Datasource):
         if self._planning_snapshot is not None:
             return self._planning_snapshot
         config = self._config
-        schema = discover_schema(config.connection, config.table, config.limits)
+        schema = self._predicate_schema or discover_schema(
+            config.connection, config.table, config.limits
+        )
         engine = discover_engine(config.connection, config.table, config.limits)
+        filter_sql, _, _ = effective_filter(
+            config.filter_sql, dict(config.query_parameters), self._pushed_predicate
+        )
         if config.convert_distributed_to_local and engine in _SINGLE_QUERY_ENGINES:
             resolved = None
             reason = (
                 "source requires a filtered Distributed read without global ordering"
             )
-            if engine == "Distributed" and config.filter_sql and not config.order_by:
+            if engine == "Distributed" and filter_sql and not config.order_by:
                 try:
                     resolved = resolve_distributed(
                         config.connection,
                         config.table,
                         schema,
                         config.limits,
-                        filter_sql=config.filter_sql,
+                        filter_sql=filter_sql,
                         split=config.split,
                     )
                 except NotApplicable as exc:
@@ -248,6 +320,7 @@ class ClickHouseDatasource(Datasource):
                     column=range_definition,
                     filter_sql=config.filter_sql,
                     parameters=dict(config.query_parameters),
+                    pushed_predicate=self._pushed_predicate,
                 )
             except PermissionError:
                 raise
@@ -271,6 +344,7 @@ class ClickHouseDatasource(Datasource):
                     column=range_definition,
                     filter_sql=config.filter_sql,
                     parameters=dict(config.query_parameters),
+                    pushed_predicate=self._pushed_predicate,
                 )
             except DiscoveryError:
                 if config.discovery_policy == "error":
@@ -334,11 +408,13 @@ class ClickHouseDatasource(Datasource):
                         column=column,
                         filter_sql=config.filter_sql,
                         parameters=dict(config.query_parameters),
+                        pushed_predicate=self._pushed_predicate,
                     )
                 except DiscoveryError:
                     if config.discovery_policy == "error":
                         raise
             source = ClickHouseDatasource(local_config)
+            source._pushed_predicate = self._pushed_predicate
             source._planning_snapshot = DiscoverySnapshot(
                 target.schema, "MergeTree", partitions, facts
             )
@@ -396,6 +472,7 @@ class ClickHouseDatasource(Datasource):
             columns=scan_columns,
             filter_sql=config.filter_sql,
             parameters=dict(config.query_parameters),
+            pushed_predicate=self._pushed_predicate,
             partition_ids=partition_ids,
             range_column=snapshot.range_facts.column
             if snapshot.range_facts is not None

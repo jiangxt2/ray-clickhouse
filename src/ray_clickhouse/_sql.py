@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ray_clickhouse._predicates import CompiledPredicate
 
 from ray_clickhouse._errors import ConfigurationError, SchemaError
 from ray_clickhouse._models import QualifiedTable, validate_identifier
@@ -270,6 +273,46 @@ def validate_filter_parameters(
     return bool(server_types) or (has_internal_parameters and not client_names)
 
 
+def predicate_binding_protocol(
+    filter_sql: str | None, parameters: Mapping[str, Any] | None
+) -> bool | None:
+    """Choose one binding protocol, rejecting ambiguous legacy SQL for pushdown."""
+    validate_filter_parameters(filter_sql, parameters)
+    if filter_sql is None:
+        return True
+    client, _, ambiguous = _filter_bindings(filter_sql)
+    return None if ambiguous else not bool(client)
+
+
+def effective_filter(
+    filter_sql: str | None,
+    parameters: Mapping[str, Any] | None,
+    pushed_predicate: CompiledPredicate | None = None,
+    *,
+    has_internal_parameters: bool = False,
+) -> tuple[str | None, dict[str, Any], bool]:
+    """Combine validated caller bindings with trusted compiler-owned bindings."""
+    filter_sql = validate_filter(filter_sql)
+    values = _parameter_map(parameters)
+    native = validate_filter_parameters(
+        filter_sql, values, has_internal_parameters=has_internal_parameters
+    )
+    if pushed_predicate is not None:
+        protocol = predicate_binding_protocol(filter_sql, values)
+        if protocol is None or protocol != pushed_predicate.native:
+            raise ConfigurationError("predicate binding protocol disagrees with filter")
+        if any(name in values for name, _ in pushed_predicate.parameters):
+            raise ConfigurationError("predicate parameter names overlap user bindings")
+        values.update(pushed_predicate.parameters)
+        native = protocol
+        filter_sql = (
+            f"({filter_sql}) AND ({pushed_predicate.sql})"
+            if filter_sql is not None
+            else pushed_predicate.sql
+        )
+    return filter_sql, values, native
+
+
 def build_select(
     *,
     table: QualifiedTable,
@@ -284,12 +327,12 @@ def build_select(
     limit: int | None = None,
     projection: str | None = None,
     order_by: tuple[tuple[str, bool], ...] | None = None,
+    pushed_predicate: CompiledPredicate | None = None,
 ) -> tuple[str, tuple[tuple[str, Any], ...]]:
-    filter_sql = validate_filter(filter_sql)
-    values = _parameter_map(parameters)
-    server_side = validate_filter_parameters(
+    filter_sql, values, server_side = effective_filter(
         filter_sql,
-        values,
+        parameters,
+        pushed_predicate,
         has_internal_parameters=partition_ids is not None
         or range_lower is not None
         or range_upper is not None,

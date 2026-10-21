@@ -19,6 +19,15 @@ The package root exports `read_clickhouse()`, `write_clickhouse()`, `WriteReceip
 
 Ray's `ReadTask` and Datasink lifecycle are DeveloperAPI contracts. Version-specific adaptation remains isolated in `_compat.py`; the connector does not import Ray internal modules.
 
+Native Dataset predicate pushdown is enabled only for verified Ray 2.58.0 and
+2.59.0 (including accepted local build suffixes). Other supported final versions
+retain existing reads and residual filtering until their expression/rejection
+contract is verified. This does not narrow the package's read/write version range.
+The Ray 2.58 container job covers only the new predicate protocol and Distributed
+cases on ClickHouse 26.8; the existing Ray 2.59 server matrix covers the distributed
+suite. Query sources retain Ray-side expression filtering. See the architecture
+section for the inherited `limit().filter()` ordering limitation.
+
 Automatic V1 table-read projection pushdown is enabled on Ray 2.58.0 and 2.59.0
 (including accepted local-build suffixes). Other supported releases retain the
 existing Ray-side column selection behavior. The verified projection contract

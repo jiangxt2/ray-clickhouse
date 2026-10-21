@@ -61,10 +61,46 @@ classes are internal and are not independent compatibility promises.
 - [Security policy](SECURITY.md)
 - [Release notes](release-notes/v1.1.md)
 
+## Native Dataset predicate filtering
+
+On verified Ray 2.58.0 and 2.59.0 releases, table reads can push a restricted
+`Dataset.filter(expr=...)` expression into ClickHouse automatically. Other
+supported Ray releases retain Ray-side filtering. Query mode is unchanged.
+
+```python
+from ray.data.expressions import col
+
+# This example assumes tenant_id is UInt32 and event_id is Int64.
+dataset = read_clickhouse(
+    host="clickhouse.example", database="analytics", table="events"
+).filter(expr=(col("tenant_id") == 42) & col("event_id").is_not_null())
+```
+
+The initial profile supports exact integer comparisons (Int8–Int64 and
+UInt8–UInt32), Bool predicates, String equality/inequality, NULL tests, and
+complete AND/OR/NOT composition, including verified Nullable/LowCardinality
+wrappers. UInt64 NULL tests are supported; UInt64 comparisons to Python integers
+stay in Ray because Arrow 19 can fail when column values exceed Int64. Float,
+Decimal, date/time, Enum, UUID, complex types, arithmetic, UDFs and IN/NOT IN remain
+Ray filters. Comparisons with None are not rewritten as NULL tests.
+
+An offered predicate is accepted completely or retained in Ray. User SQL filters
+and their binding protocol remain compatible. Effective settings that truncate
+results or imply unsupported rewrites disable this optimization; metadata access
+errors remain errors. Accepted expressions can supply the filter needed by
+`convert_distributed_to_local=True`; all existing conversion checks still apply.
+No query, expression or parameter values are added to connector diagnostics.
+
+Residual filters remain before downstream limits. Ray 2.58/2.59 themselves may
+move an expression across an earlier `limit()`, so `limit().filter(expr=...)`
+does not promise authored operation order. This connector does not change that
+upstream behavior. See [architecture](doc/source/architecture.md#native-predicate-pushdown).
+
 ## Filtered Distributed local reads
 
 Set `convert_distributed_to_local=True` to attempt direct local scans of a
-single-layer Distributed table with an explicit `filter`:
+single-layer Distributed table with an explicit `filter` or an accepted Dataset
+predicate:
 
 ```python
 dataset = read_clickhouse(
