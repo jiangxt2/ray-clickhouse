@@ -21,7 +21,9 @@ def ray_runtime() -> Iterator[None]:
     import ray
 
     os.environ["RAY_ADDRESS"] = address
-    ray.init(address="auto", namespace="ray-clickhouse-it")
+    owns_runtime = not ray.is_initialized()
+    if owns_runtime:
+        ray.init(address="auto", namespace="ray-clickhouse-it")
     minimum_nodes = int(os.environ.get("RAY_CLICKHOUSE_IT_MIN_NODES", "3"))
     deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
@@ -30,10 +32,12 @@ def ray_runtime() -> Iterator[None]:
             break
         time.sleep(1)
     else:
-        ray.shutdown()
+        if owns_runtime:
+            ray.shutdown()
         raise RuntimeError(f"Ray cluster did not reach {minimum_nodes} alive nodes")
     yield
-    ray.shutdown()
+    if owns_runtime:
+        ray.shutdown()
 
 
 def _connection_options() -> dict[str, object]:

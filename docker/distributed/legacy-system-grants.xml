@@ -1,0 +1,5 @@
+<clickhouse>
+  <access_control_improvements>
+    <select_from_system_db_requires_grant>false</select_from_system_db_requires_grant>
+  </access_control_improvements>
+</clickhouse>

@@ -9,6 +9,7 @@ from ray_clickhouse._schema import (
     canonical_schema,
     parse_describe_rows,
     render_read_projection,
+    type_declaration_key,
     validate_source_schema,
 )
 
@@ -80,6 +81,42 @@ def test_tuple_type_matrix_checks_nested_fields() -> None:
 
     assert arrow_compatible(source, "Tuple(first String, second Int32)")
     assert not arrow_compatible(wrong_source, "Tuple(first String, second Int32)")
+
+
+@pytest.mark.parametrize(
+    "compact,pretty",
+    [
+        ("Tuple(a Int64, b String)", "Tuple(\n    a Int64,\n    b String)"),
+        ("Array(Tuple(a Int64, b String))", "Array( Tuple(\n a Int64,\n b String ) )"),
+        ("Enum8('a b'=1, 'it\\'s'=-2)", "Enum8( 'a b' = 1, 'it\\'s' = - 2 )"),
+        ("DateTime64(6,'Etc/GMT+8')", "DateTime64 ( 6 , 'Etc/GMT+8' )"),
+        ("Tuple(`a b` UInt8)", "Tuple(\n `a b`   UInt8\n)"),
+    ],
+)
+def test_type_declaration_key_ignores_only_display_whitespace(compact, pretty):
+    assert type_declaration_key(compact) == type_declaration_key(pretty)
+
+
+@pytest.mark.parametrize(
+    "left,right",
+    [
+        ("UInt8", "UInt 8"),
+        ("Tuple(a Int64)", "Tuple(b Int64)"),
+        ("Enum8('a b'=1)", "Enum8('ab'=1)"),
+        ("DateTime64(3,'UTC')", "DateTime64(6,'UTC')"),
+        ("DateTime('UTC')", "DateTime('Europe/Paris')"),
+        ("Date", "Date32"),
+        ("Tuple(a UInt32)", "Tuple(a UInt64)"),
+    ],
+)
+def test_type_declaration_key_preserves_semantic_differences(left, right):
+    assert type_declaration_key(left) != type_declaration_key(right)
+
+
+@pytest.mark.parametrize("value", ["", "Tuple(a Int64", "Enum8('unclosed=1)"])
+def test_type_declaration_key_reuses_balanced_argument_validation(value):
+    with pytest.raises(SchemaError):
+        type_declaration_key(value)
 
 
 def test_validate_source_schema_rejects_missing_required_column() -> None:

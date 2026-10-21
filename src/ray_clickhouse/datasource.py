@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
+import logging
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 import pyarrow as pa
@@ -23,6 +24,11 @@ from ray_clickhouse._discovery import (
     discover_sorting_key,
     select_auto_range_column,
 )
+from ray_clickhouse._distributed import (
+    NotApplicable,
+    ResolvedDistributed,
+    resolve_distributed,
+)
 from ray_clickhouse._errors import ConfigurationError, DiscoveryError, PermissionError
 from ray_clickhouse._models import (
     ClickHouseConnection,
@@ -35,7 +41,7 @@ from ray_clickhouse._models import (
     validate_identifier,
 )
 from ray_clickhouse._planning import group_partitions, plan_integer_ranges
-from ray_clickhouse._schema import render_read_projection
+from ray_clickhouse._schema import SchemaPlan, render_read_projection
 from ray_clickhouse._sql import build_select, validate_filter_parameters
 from ray_clickhouse._transport import stream_query
 
@@ -45,6 +51,7 @@ def _is_mergetree_engine(engine: str) -> bool:
 
 
 _SINGLE_QUERY_ENGINES = frozenset({"View", "Distributed"})
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, repr=False)
@@ -62,6 +69,7 @@ class ClickHouseReadConfig:
     max_tasks: int = 256
     limits: ResourceLimits = field(default_factory=ResourceLimits)
     diagnostic_flush_logs: bool = False
+    convert_distributed_to_local: bool = False
 
     def __post_init__(self) -> None:
         validate_filter_parameters(self.filter_sql, dict(self.query_parameters))
@@ -89,6 +97,8 @@ class ClickHouseReadConfig:
             raise ConfigurationError("max_tasks must be >= target_tasks")
         if not isinstance(self.diagnostic_flush_logs, bool):
             raise ConfigurationError("diagnostic_flush_logs must be a boolean")
+        if not isinstance(self.convert_distributed_to_local, bool):
+            raise ConfigurationError("convert_distributed_to_local must be a boolean")
 
     def __repr__(self) -> str:
         parameter_names = tuple(name for name, _ in self.query_parameters)
@@ -109,6 +119,9 @@ class ClickHouseDatasource(Datasource):
         initialize_datasource()
         self._config = config
         self._planning_snapshot: DiscoverySnapshot | None = None
+        self._resolved_distributed: ResolvedDistributed | None = None
+        self._local_sources: tuple[ClickHouseDatasource, ...] = ()
+        self._logical_fallback = False
 
     @property
     def config(self) -> ClickHouseReadConfig:
@@ -128,6 +141,35 @@ class ClickHouseDatasource(Datasource):
         config = self._config
         schema = discover_schema(config.connection, config.table, config.limits)
         engine = discover_engine(config.connection, config.table, config.limits)
+        if config.convert_distributed_to_local and engine in _SINGLE_QUERY_ENGINES:
+            resolved = None
+            reason = (
+                "source requires a filtered Distributed read without global ordering"
+            )
+            if engine == "Distributed" and config.filter_sql and not config.order_by:
+                try:
+                    resolved = resolve_distributed(
+                        config.connection,
+                        config.table,
+                        schema,
+                        config.limits,
+                        filter_sql=config.filter_sql,
+                        split=config.split,
+                    )
+                except NotApplicable as exc:
+                    reason = str(exc)
+            if resolved is not None:
+                sources = self._prepare_local_sources(schema, resolved)
+                self._resolved_distributed = resolved
+                self._local_sources = sources
+                logger.info(
+                    "ClickHouse read path=local shards=%d", len(self._local_sources)
+                )
+            else:
+                self._logical_fallback = True
+                logger.info("ClickHouse read path=logical reason=%s", reason)
+            self._planning_snapshot = DiscoverySnapshot(schema=schema, engine=engine)
+            return self._planning_snapshot
         if not _is_mergetree_engine(engine) and not (
             config.split in {"single", "auto"} and engine in _SINGLE_QUERY_ENGINES
         ):
@@ -200,6 +242,68 @@ class ClickHouseDatasource(Datasource):
             range_facts=range_facts,
         )
         return self._planning_snapshot
+
+    def _prepare_local_sources(
+        self, source_schema: SchemaPlan, resolved: ResolvedDistributed
+    ) -> tuple[ClickHouseDatasource, ...]:
+        sources = []
+        config = self._config
+        for target in resolved.targets:
+            local_config = replace(
+                config,
+                connection=target.connection,
+                table=target.table,
+                convert_distributed_to_local=False,
+                columns=config.columns or tuple(source_schema.arrow_schema.names),
+            )
+            facts = None
+            partitions = target.partitions or ()
+            if config.split == "partition" and target.partitions is None:
+                if config.discovery_policy == "error":
+                    raise DiscoveryError(
+                        "local target lacks physical partition metadata"
+                    )
+            if config.split in {"auto", "range"}:
+                try:
+                    if config.split == "auto":
+                        if target.sorting_key is None:
+                            raise DiscoveryError(
+                                "local target lacks sorting_key capability"
+                            )
+                        column = select_auto_range_column(
+                            target.sorting_key, target.schema.columns
+                        )
+                    else:
+                        candidate = next(
+                            (
+                                column
+                                for column in target.schema.columns
+                                if column.name == config.range_column
+                            ),
+                            None,
+                        )
+                        if candidate is None:
+                            raise ConfigurationError(
+                                "range_column is not present in the table schema"
+                            )
+                        column = candidate
+                    facts = discover_range_facts(
+                        target.connection,
+                        target.table,
+                        config.limits,
+                        column=column,
+                        filter_sql=config.filter_sql,
+                        parameters=dict(config.query_parameters),
+                    )
+                except DiscoveryError:
+                    if config.discovery_policy == "error":
+                        raise
+            source = ClickHouseDatasource(local_config)
+            source._planning_snapshot = DiscoverySnapshot(
+                target.schema, "MergeTree", partitions, facts
+            )
+            sources.append(source)
+        return tuple(sources)
 
     def _selected_columns(self, snapshot: DiscoverySnapshot) -> tuple[str, ...]:
         columns = self._config.columns or tuple(snapshot.schema.arrow_schema.names)
@@ -286,7 +390,36 @@ class ClickHouseDatasource(Datasource):
         del data_context
         snapshot = self._ensure_planning_snapshot()
         columns = self._selected_columns(snapshot)
-        if self._config.split == "single":
+        if self._local_sources:
+            task_count = min(
+                max(1, parallelism), self._config.target_tasks, self._config.max_tasks
+            )
+            # Allocate the budget across shards before splitting within a shard.
+            shard_budget = max(1, task_count // len(self._local_sources))
+            scans = [
+                task
+                for source in self._local_sources
+                for task in source.get_read_tasks(shard_budget)
+            ]
+            scan_groups: list[list[ReadTask]] = [
+                [] for _ in range(min(task_count, len(scans)))
+            ]
+            for index, task in enumerate(scans):
+                scan_groups[index % len(scan_groups)].append(task)
+            schema = pa.schema(
+                [snapshot.schema.arrow_schema.field(column) for column in columns]
+            )
+            logger.info(
+                "ClickHouse local read shards=%d tasks=%d scans=%d",
+                len(self._local_sources),
+                len(scan_groups),
+                len(scans),
+            )
+            return [
+                _group_read_tasks(tuple(group), schema, per_task_row_limit)
+                for group in scan_groups
+            ]
+        if self._config.split == "single" or self._logical_fallback:
             return [
                 self._make_task(columns=columns, per_task_row_limit=per_task_row_limit)
             ]
@@ -333,3 +466,38 @@ class ClickHouseDatasource(Datasource):
             ]
 
         return [self._make_task(columns=columns, per_task_row_limit=per_task_row_limit)]
+
+
+def _group_read_tasks(
+    tasks: tuple[ReadTask, ...], schema: pa.Schema, row_limit: int | None
+) -> ReadTask:
+    """Stream fixed scans sequentially, sharing one task row budget and cleanup."""
+
+    def read_fn() -> Iterator[pa.Table]:
+        remaining = row_limit
+        for task in tasks:
+            if remaining is not None and remaining <= 0:
+                return
+            stream = iter(task())
+            try:
+                for block in stream:
+                    if remaining is not None:
+                        block = block.slice(0, remaining)
+                        remaining -= block.num_rows
+                    if block.num_rows:
+                        yield block
+                    if remaining is not None and remaining <= 0:
+                        return
+            finally:
+                close = getattr(stream, "close", None)
+                if close is not None:
+                    close()
+
+    return make_read_task(
+        read_fn,
+        BlockMetadata(
+            num_rows=None, size_bytes=None, exec_stats=None, input_files=None
+        ),
+        schema,
+        row_limit,
+    )

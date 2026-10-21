@@ -122,9 +122,9 @@ def select_auto_range_column(
 @dataclass(frozen=True)
 class PartitionInfo:
     partition_id: str
-    rows: int
-    marks: int
-    bytes_on_disk: int
+    rows: int | None
+    marks: int | None
+    bytes_on_disk: int | None
 
 
 @dataclass(frozen=True)

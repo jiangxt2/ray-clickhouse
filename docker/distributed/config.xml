@@ -1,0 +1,25 @@
+<clickhouse>
+  <listen_host>0.0.0.0</listen_host>
+  <max_server_memory_usage>805306368</max_server_memory_usage>
+  <access_control_improvements>
+    <select_from_system_db_requires_grant>true</select_from_system_db_requires_grant>
+  </access_control_improvements>
+  <background_schedule_pool_size>16</background_schedule_pool_size>
+  <background_buffer_flush_schedule_pool_size>4</background_buffer_flush_schedule_pool_size>
+  <background_message_broker_schedule_pool_size>4</background_message_broker_schedule_pool_size>
+  <background_distributed_schedule_pool_size>4</background_distributed_schedule_pool_size>
+  <remote_servers>
+    <local_scan>
+      <shard><internal_replication>true</internal_replication>
+        <replica><host>clickhouse</host><port>9000</port></replica>
+        <replica><host>ch2</host><port>9000</port></replica>
+      </shard>
+      <shard><internal_replication>true</internal_replication>
+        <replica><host>ch3</host><port>9000</port></replica>
+        <replica><host>ch4</host><port>9000</port></replica>
+      </shard>
+    </local_scan>
+  </remote_servers>
+  <zookeeper><node><host>keeper</host><port>9181</port></node></zookeeper>
+  <query_log><flush_interval_milliseconds>1000</flush_interval_milliseconds></query_log>
+</clickhouse>

@@ -62,6 +62,7 @@ markers = [
     "integration: requires a real ClickHouse service",
     "ray: requires a Ray runtime",
     "cluster: requires a multi-node Ray cluster",
+    "distributed: requires two shards with two replicas and Keeper",
 ]
 
 [tool.ruff]

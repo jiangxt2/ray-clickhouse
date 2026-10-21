@@ -17,12 +17,16 @@ def group_partitions(
     group_count = min(len(items), target_tasks, max_tasks)
     buckets: list[list[str]] = [[] for _ in range(group_count)]
     weights = [0] * group_count
-    for item in sorted(
-        items, key=lambda value: (-value.bytes_on_disk, value.partition_id)
-    ):
+
+    def weight(item: PartitionInfo) -> int:
+        if item.bytes_on_disk is not None:
+            return item.bytes_on_disk
+        return item.rows if item.rows is not None else 1
+
+    for item in sorted(items, key=lambda value: (-weight(value), value.partition_id)):
         index = min(range(group_count), key=lambda value: (weights[value], value))
         buckets[index].append(item.partition_id)
-        weights[index] += item.bytes_on_disk
+        weights[index] += weight(item)
     return tuple(tuple(sorted(bucket)) for bucket in buckets if bucket)
 
 

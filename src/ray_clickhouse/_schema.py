@@ -67,6 +67,10 @@ class TargetTable:
 _TUPLE_FIELD = re.compile(
     r"^(?P<name>`(?:[^`]|``)+`|[A-Za-z_][A-Za-z0-9_]*)\s+(?P<type>.+)$"
 )
+_DECLARATION_TOKEN = re.compile(
+    r"'(?:[^'\\]|\\.|'')*'|`(?:[^`\\]|\\.|``)*`|"
+    r'"(?:[^"\\]|\\.|"")*"|[A-Za-z_][A-Za-z0-9_]*|\d+|[^\s]'
+)
 
 
 def split_type_arguments(value: str) -> tuple[str, ...]:
@@ -121,6 +125,17 @@ def parse_type(value: str) -> ClickHouseType:
     return ClickHouseType(
         text[:open_index].strip(), split_type_arguments(text[open_index + 1 : -1])
     )
+
+
+def type_declaration_key(value: str) -> tuple[str, ...]:
+    """Ignore display whitespace, preserving tokens and quoted type arguments.
+
+    Native DESCRIBE may pretty-print named tuples while system.columns uses
+    compact names. This key compares their spelling without interpreting SQL,
+    changing a declaration, or equating different ClickHouse types.
+    """
+    split_type_arguments(value)
+    return tuple(_DECLARATION_TOKEN.findall(value))
 
 
 def _transport_type_expression(value: str) -> str:

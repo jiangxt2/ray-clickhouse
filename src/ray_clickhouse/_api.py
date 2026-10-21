@@ -68,6 +68,7 @@ def read_clickhouse(
     split: SplitMode = "single",
     range_column: str | None = None,
     discovery_policy: DiscoveryPolicy = "single",
+    convert_distributed_to_local: bool = False,
     batch_rows: int = 65_536,
     batch_bytes: int = 64 * 1024 * 1024,
     target_tasks: int = 8,
@@ -117,6 +118,8 @@ def read_clickhouse(
         split: Table split mode. Query reads require single.
         range_column: Integer range column for explicit table splitting.
         discovery_policy: Table planning fallback policy.
+        convert_distributed_to_local: Opt into filtered local shard scans; single
+            then means one query per shard, under one global Ray task budget.
         batch_rows: Maximum rows per emitted Arrow block.
         batch_bytes: Byte target per block; one indivisible row may exceed it.
         target_tasks: Desired table task count; does not split a query.
@@ -140,6 +143,10 @@ def read_clickhouse(
     ensure_supported_ray_version()
     if (table is None) == (query is None):
         raise ConfigurationError("specify exactly one of table or query")
+    if not isinstance(convert_distributed_to_local, bool):
+        raise ConfigurationError("convert_distributed_to_local must be a boolean")
+    if query is not None and convert_distributed_to_local:
+        raise ConfigurationError("query cannot use convert_distributed_to_local")
     connection = _connection(
         host=host,
         database=database,
@@ -189,6 +196,7 @@ def read_clickhouse(
             split=split,
             range_column=range_column,
             discovery_policy=discovery_policy,
+            convert_distributed_to_local=convert_distributed_to_local,
             target_tasks=target_tasks,
             max_tasks=max_tasks,
             diagnostic_flush_logs=diagnostic_flush_logs,
