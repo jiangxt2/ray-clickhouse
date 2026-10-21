@@ -109,7 +109,8 @@ def test_dataset_projection_prunes_data_sql_and_preserves_values(
     schema = result.schema().base_schema
     assert schema.names == ["value", "day", "amount"]
     assert schema.field("value").nullable
-    assert not schema.field("day").nullable
+    if supports_v1_projection_pushdown():
+        assert not schema.field("day").nullable
     assert schema.field("day").type == pa.date32()
     assert schema.field("amount").type == pa.decimal128(12, 2)
     for sql in _data_queries(clickhouse_client, table_name):
@@ -128,16 +129,22 @@ def test_dataset_projection_prunes_data_sql_and_preserves_values(
 def test_empty_projection_matches_native_materialization_and_count(
     clickhouse_client, connection_options, table_name, split, count
 ):
-    _create(clickhouse_client, table_name, count)
+    rows = _create(clickhouse_client, table_name, count)
     dataset = _source(connection_options, table_name, split)
+    schema = dataset.schema().base_schema
+    native_rows = [
+        dict(zip(schema.names, row, strict=True)) for row in rows if 2 <= row[0] < 10
+    ]
     projected = dataset.select_columns([]).materialize()
     native = (
-        ray.data.from_arrow(pa.table({"id": list(range(2, min(count, 10)))}))
+        ray.data.from_arrow(pa.Table.from_pylist(native_rows, schema=schema))
         .select_columns([])
         .materialize()
     )
     assert projected.count() == native.count()
-    assert projected.take_all() == native.take_all()
+    # Ray 2.55 retains the source columns for an empty native selection. Match
+    # their values without assuming ordering across independent physical splits.
+    assert sorted(projected.take_all(), key=repr) == sorted(native.take_all(), key=repr)
     assert (
         projected.map_batches(lambda block: block, batch_format="pyarrow").count()
         == native.count()

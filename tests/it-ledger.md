@@ -556,3 +556,32 @@ projects were retained. Initial per-file source/test hashes are recorded in
 are in `.artifacts/projection/compatibility-correction/source-hashes.json`.
 Execution details and requirement traceability are in
 `~/GitHub/plans/ray-clickhouse-projection-pushdown.md`.
+
+### Legacy Ray projection IT review correction
+
+PR #21 review identified a strict Date-nullability assertion outside the
+verified pushdown versions. Static analysis also found an id-only empty-projection
+reference that could not match Ray 2.55 retaining the full source row. Both
+test compatibility omissions are corrected without changing production code.
+
+Only enabled pushdown versions must preserve the non-nullable Date field in the
+projected output. All versions still check values, column order, logical types,
+filters and data-query SQL. The native empty-selection reference now contains
+all filtered source columns with the discovered schema, including typed empty
+tables. Exact row multisets are compared across physical splits, without adding
+a row-order guarantee. Native counts and follow-up batch counts remain checked.
+
+| Suite | Coverage / environment | Result and evidence |
+| --- | --- | --- |
+| Legacy native fallback | Ray 2.55.0, Python 3.12.12, PyArrow 19.0.1, clickhouse-connect 1.5.0, ClickHouse 26.8.1.2041 | Twelve affected IT cases passed once; zero failures/errors/skips. `.artifacts/it/review-it-ray255/` |
+| Enabled pushdown | Ray 2.59.0, otherwise the same client/server baseline | The same twelve cases passed once; zero failures/errors/skips. `.artifacts/it/review-it-ray259/` |
+
+Each suite selects only
+`test_dataset_projection_prunes_data_sql_and_preserves_values` and
+`test_empty_projection_matches_native_materialization_and_count`, covering four
+split modes and empty/nonempty tables. Runtime JSON, XML summaries and per-file
+hashes are in `.artifacts/projection/review-it-compatibility/`. Docker lifecycle
+logs confirm the project-owned fixture was cleaned after each run. No unchanged
+full protocol or multi-node suite was repeated. Ruff format/lint, diff checks
+and cumulative static self-review passed. Commit, push and remote review state
+are tracked in the local plan.
