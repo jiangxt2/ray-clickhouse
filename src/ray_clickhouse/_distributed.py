@@ -37,7 +37,9 @@ from ray_clickhouse._models import (
 from ray_clickhouse._schema import (
     SchemaPlan,
     TargetColumn,
+    _unwrap,
     canonical_schema,
+    parse_type,
     render_read_projection,
     type_declaration_key,
 )
@@ -215,7 +217,7 @@ def parse_distributed_engine(text: str) -> tuple[str, QualifiedTable]:
 
 
 def predicate_columns(text: str, columns: tuple[TargetColumn, ...]) -> frozenset[str]:
-    """Recognize scalar comparisons and Boolean composition without rewriting SQL."""
+    """Recognize row-local scalar predicates without rewriting their SQL."""
     tokens = _tokens(text)
     by_name = {column.name: column for column in columns}
     used: set[str] = set()
@@ -228,22 +230,37 @@ def predicate_columns(text: str, columns: tuple[TargetColumn, ...]) -> frozenset
             return True
         return False
 
-    def atom() -> None:
+    def constant(*, string_only: bool = False) -> bool:
         nonlocal index
         if index == len(tokens):
-            raise NotApplicable("incomplete predicate")
+            return False
         kind, value = tokens[index]
-        index += 1
         if kind == "parameter":
             if value.startswith("{") and re.search(r"\bIdentifier\b", value):
                 raise NotApplicable(
                     "identifier bindings require logical-source reading"
                 )
-            return
-        if kind in {"string", "number"}:
-            return
-        if kind == "word" and value.upper() in {"NULL", "TRUE", "FALSE"}:
-            return
+        elif kind == "string":
+            pass
+        elif not string_only and (
+            kind == "number"
+            or kind == "word"
+            and value.upper() in {"NULL", "TRUE", "FALSE"}
+        ):
+            pass
+        else:
+            return False
+        index += 1
+        return True
+
+    def atom() -> TargetColumn | None:
+        nonlocal index
+        if constant():
+            return None
+        if index == len(tokens):
+            raise NotApplicable("incomplete predicate")
+        kind, value = tokens[index]
+        index += 1
         if kind in {"word", "quoted"}:
             name = value.strip('`"')
             column = by_name.get(name)
@@ -252,7 +269,7 @@ def predicate_columns(text: str, columns: tuple[TargetColumn, ...]) -> frozenset
                     r"\b(?:Array|Tuple|Map|Nested|JSON|Object)\b", column.declared_type
                 ):
                     used.add(name)
-                    return
+                    return column
         raise NotApplicable("predicate requires a physical scalar column")
 
     def term() -> None:
@@ -263,8 +280,37 @@ def predicate_columns(text: str, columns: tuple[TargetColumn, ...]) -> frozenset
             if not take(")"):
                 raise NotApplicable("unsupported predicate parentheses")
         else:
-            atom()
-            if take("IS"):
+            column = atom()
+            negated = take("NOT")
+            if take("BETWEEN"):
+                if (
+                    column is None
+                    or not constant()
+                    or not take("AND")
+                    or not constant()
+                ):
+                    raise NotApplicable("BETWEEN requires a column and constant bounds")
+            elif take("LIKE"):
+                if (
+                    column is None
+                    or _unwrap(parse_type(column.declared_type))[0].name
+                    not in {"String", "FixedString"}
+                    or not constant(string_only=True)
+                ):
+                    raise NotApplicable(
+                        "LIKE requires a string column and fixed pattern"
+                    )
+            elif take("IN"):
+                if column is None or not take("(") or not constant():
+                    raise NotApplicable("IN requires a column and nonempty scalar list")
+                while take(","):
+                    if not constant():
+                        raise NotApplicable("IN requires constant scalar list elements")
+                if not take(")"):
+                    raise NotApplicable("IN requires a constant scalar list")
+            elif negated:
+                raise NotApplicable("unsupported negated predicate")
+            elif take("IS"):
                 take("NOT")
                 if not take("NULL"):
                     raise NotApplicable("unsupported IS predicate")

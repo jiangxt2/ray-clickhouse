@@ -107,6 +107,159 @@ def test_predicate_fallback(predicate):
         predicate_columns(predicate, COLUMNS)
 
 
+@pytest.mark.parametrize(
+    "predicate,expected",
+    [
+        ("id BETWEEN -3 AND 20", {"id"}),
+        ("id NOT BETWEEN 20 AND -3", {"id"}),
+        ("value BETWEEN NULL AND 20", {"value"}),
+        ("id BETWEEN {lo:Int64} AND {hi:Int64}", {"id"}),
+        ("id BETWEEN %(lo)s AND %(hi)s AND value >= 0", {"id", "value"}),
+        ("txt BETWEEN 'a' AND 'z'", {"txt"}),
+        ("txt LIKE 'row-%'", {"txt"}),
+        ("txt NOT LIKE 'row-_'", {"txt"}),
+        (r"txt LIKE 'a\\%b\\_c'", {"txt"}),
+        ("txt LIKE 'it''s_%'", {"txt"}),
+        ("txt LIKE {pattern:String}", {"txt"}),
+        ("txt NOT LIKE %(pattern)s", {"txt"}),
+        ("txt LIKE 'GLOBAL IN (SELECT)'", {"txt"}),
+        ("id IN (1)", {"id"}),
+        ("id IN (1, -2, 1, 3.5, NULL, TRUE, FALSE)", {"id"}),
+        ("id NOT IN ({one:Int64}, {two:Int64})", {"id"}),
+        ("id IN (%(one)s, %(two)s)", {"id"}),
+        ("txt IN ('a,b', 'it''s', 'GLOBAL', 'SELECT')", {"txt"}),
+        ("`value` not in (NULL, 3)", {"value"}),
+        (
+            "NOT (id BETWEEN 2 AND 9 OR txt LIKE 'x%') AND value IN (NULL, 3)",
+            {"id", "txt", "value"},
+        ),
+    ],
+)
+def test_simple_predicates_collect_only_physical_columns(predicate, expected):
+    columns = COLUMNS + (TargetColumn("txt", "String", "", "", 4),)
+    assert predicate_columns(predicate, columns) == frozenset(expected)
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        "String",
+        "FixedString(8)",
+        "Nullable(String)",
+        "LowCardinality(String)",
+        "LowCardinality(Nullable(String))",
+    ],
+)
+def test_fixed_like_accepts_existing_string_types(declared):
+    column = TargetColumn("txt", declared, "", "", 1)
+    assert predicate_columns("txt LIKE {pattern:String}", (column,)) == {"txt"}
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        "id BETWEEN value AND 20",
+        "id BETWEEN 1 AND value",
+        "id BETWEEN abs(-1) AND 20",
+        "id BETWEEN 1 OR 20",
+        "id BETWEEN 1 AND",
+        "1 BETWEEN 0 AND 2",
+        "id LIKE '1%'",
+        "txt LIKE txt",
+        "txt LIKE 3",
+        "txt LIKE NULL",
+        "txt LIKE concat('a', '%')",
+        "txt ILIKE 'a%'",
+        r"txt LIKE 'a%' ESCAPE '\\'",
+        "txt NOT = 'a'",
+        "id IN ()",
+        "id IN (1,)",
+        "id IN (1,,2)",
+        "id IN (1",
+        "id IN (value, 2)",
+        "id IN (1, value)",
+        "id IN (abs(-1))",
+        "id IN ((1, 2))",
+        "id IN ([1, 2])",
+        "(id, value) IN ((1, 2))",
+        "id IN other_set",
+        "id IN {items:Array(Int64)}",
+        "id GLOBAL IN (1, 2)",
+        "id GLOBAL NOT IN (1, 2)",
+        "NOT (id GLOBAL IN (1, 2))",
+        "id IN (SELECT id FROM other)",
+        "id NOT IN (SELECT id FROM other)",
+        "id IN (1, (SELECT id FROM other))",
+        "id BETWEEN 1 AND 3 OR id GLOBAL IN (1)",
+        "txt LIKE 'a%' OR alias IN (1)",
+        "_shard_num IN (1)",
+        "alias BETWEEN 1 AND 3",
+        "id IN (1, {column:Identifier})",
+    ],
+)
+def test_simple_predicate_recognizer_rejects_unsupported_forms(predicate):
+    columns = COLUMNS + (TargetColumn("txt", "String", "", "", 4),)
+    with pytest.raises(NotApplicable):
+        predicate_columns(predicate, columns)
+
+
+@pytest.mark.parametrize(
+    "predicate", ["id GLOBAL IN (1)", "txt LIKE txt", "id IN (SELECT id FROM other)"]
+)
+def test_unsupported_predicates_stop_clean_schema_before_discovery(predicate):
+    columns = (COLUMNS[0], TargetColumn("txt", "String", "", "", 2))
+    schema = SchemaPlan(pa.schema([("id", pa.int64()), ("txt", pa.string())]), columns)
+    with (
+        patch("ray_clickhouse._distributed.metadata_reader") as open_reader,
+        pytest.raises(NotApplicable),
+    ):
+        resolve_distributed(
+            CONNECTION,
+            QualifiedTable("db", "t"),
+            schema,
+            ResourceLimits(),
+            filter_sql=predicate,
+            split="single",
+        )
+    open_reader.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "predicate", ["id BETWEEN 1 AND 3", "txt LIKE 'row-%'", "id IN (1, 2)"]
+)
+def test_supported_predicates_reach_discovery_with_clean_schema(predicate):
+    columns = (COLUMNS[0], TargetColumn("txt", "String", "", "", 2))
+    schema = SchemaPlan(pa.schema([("id", pa.int64()), ("txt", pa.string())]), columns)
+    with (
+        patch(
+            "ray_clickhouse._distributed.metadata_reader",
+            side_effect=RuntimeError("discovery reached"),
+        ) as open_reader,
+        pytest.raises(RuntimeError, match="discovery reached"),
+    ):
+        resolve_distributed(
+            CONNECTION,
+            QualifiedTable("db", "t"),
+            schema,
+            ResourceLimits(),
+            filter_sql=predicate,
+            split="single",
+        )
+    open_reader.assert_called_once_with(CONNECTION, ResourceLimits())
+
+
+@pytest.mark.parametrize("operator", ["IN", "NOT IN", "GLOBAL IN"])
+def test_public_filter_keeps_rejecting_select_subqueries(operator):
+    with pytest.raises(ConfigurationError, match="filter must be a predicate"):
+        read_clickhouse(
+            host="entry",
+            database="db",
+            table="t",
+            filter=f"id {operator} (SELECT id FROM other)",
+            convert_distributed_to_local=True,
+        )
+
+
 def reader():
     return MetadataReader(Mock(), CONNECTION, ResourceLimits())
 

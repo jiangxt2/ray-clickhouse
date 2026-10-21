@@ -59,6 +59,27 @@ filter can resolve to one fixed replica of every shard. Ordinary Views remain
 logical queries. Global ordering, query sources, nested Distributed targets,
 functions and unsupported contexts are outside this conversion profile.
 
+The predicate recognizer accepts the existing scalar comparisons and NULL tests,
+plus column BETWEEN constant bounds, string-column LIKE fixed patterns, and
+column IN nonempty scalar constant lists, including their NOT forms. Constants
+may use the existing scalar value-binding protocols. Boolean composition must
+be recognized in full; an unsupported branch makes the entire filter ineligible.
+The AND inside BETWEEN belongs to that predicate, independently of surrounding
+Boolean AND/OR operators. LIKE accepts String/FixedString and their supported
+Nullable/LowCardinality wrappers. A bound pattern is constant for the query;
+ClickHouse validates its actual type.
+
+SQL and bindings are passed through unchanged: IN lists are not expanded to OR,
+BETWEEN is not rewritten, and LIKE matching is never evaluated in Python.
+When a filter has no client-side placeholders, generated partition/range values
+use native bindings. Internal constraints therefore cannot make literal `%` or
+`%(name)s` text inside quoted strings undergo Python formatting. Explicit client
+bindings keep their existing protocol, and quoted native-placeholder lookalikes
+remain rejected when parameters are bound.
+Subqueries, GLOBAL IN, external sets, tuple/array list forms, column/function
+patterns, ILIKE and custom ESCAPE clauses do not qualify. The existing public
+filter validator rejects SELECT subqueries before conversion is attempted.
+
 The driver reads field names and declarations separately on the entry node and
 each selected replica. It uses explicit projections and named result mapping:
 
