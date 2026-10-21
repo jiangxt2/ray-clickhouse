@@ -19,6 +19,12 @@ The package root exports `read_clickhouse()`, `write_clickhouse()`, `WriteReceip
 
 Ray's `ReadTask` and Datasink lifecycle are DeveloperAPI contracts. Version-specific adaptation remains isolated in `_compat.py`; the connector does not import Ray internal modules.
 
+Automatic V1 table-read projection pushdown is enabled on Ray 2.58.0 and 2.59.0
+(including accepted local-build suffixes). Other supported releases retain the
+existing Ray-side column selection behavior. The verified projection contract
+includes column ordering, independent Dataset branches and native empty-projection
+row counts through the public `BlockAccessor` API. Query reads do not opt in.
+
 ## Error hierarchy
 
 All connector exceptions derive from `RayClickHouseError`. Configuration and connection setup use `ConfigurationError`, `AuthenticationError`, `PermissionError`, and `ObjectNotFoundError`. Discovery and conversion use `DiscoveryError` and `SchemaError`. Data-path failures use `TransportError`, `ReadError`, and `WriteError`.

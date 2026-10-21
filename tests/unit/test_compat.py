@@ -11,6 +11,27 @@ from ray_clickhouse._errors import ConfigurationError
 
 
 @pytest.mark.parametrize(
+    ("version", "supported"),
+    [
+        ("2.55.0", False),
+        ("2.56.1", False),
+        ("2.57.0", False),
+        ("2.58.0", True),
+        ("2.59.0", True),
+        ("2.59.0+local.1", True),
+        ("2.58.1", False),
+        ("2.60.0", False),
+        ("2.59.0rc1", False),
+    ],
+)
+def test_projection_contract_is_enabled_only_on_verified_versions(
+    monkeypatch, version, supported
+):
+    monkeypatch.setattr(_compat, "_RAY_VERSION", version)
+    assert _compat.supports_v1_projection_pushdown() is supported
+
+
+@pytest.mark.parametrize(
     "version",
     (
         "2.55.0",

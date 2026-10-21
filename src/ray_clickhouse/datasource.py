@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator
+from copy import copy
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
@@ -11,7 +12,12 @@ import pyarrow as pa
 from ray.data.block import BlockMetadata
 from ray.data.datasource import Datasource, ReadTask
 
-from ray_clickhouse._compat import ensure_supported_ray_version, make_read_task
+from ray_clickhouse._compat import (
+    empty_projection,
+    ensure_supported_ray_version,
+    make_read_task,
+    supports_v1_projection_pushdown,
+)
 from ray_clickhouse._discovery import (
     LOCAL_MERGETREE_ENGINES,
     DiscoverySnapshot,
@@ -118,6 +124,7 @@ class ClickHouseDatasource(Datasource):
         initialize_datasource = cast(Callable[[], None], super().__init__)
         initialize_datasource()
         self._config = config
+        self._projection_columns: tuple[str, ...] | None = config.columns
         self._planning_snapshot: DiscoverySnapshot | None = None
         self._resolved_distributed: ResolvedDistributed | None = None
         self._local_sources: tuple[ClickHouseDatasource, ...] = ()
@@ -134,6 +141,39 @@ class ClickHouseDatasource(Datasource):
     def estimate_inmemory_data_size(self) -> None:
         """Do not trigger an extra COUNT/size/sample query during Ray planning."""
         return None
+
+    def supports_projection_pushdown(self) -> bool:
+        return supports_v1_projection_pushdown()
+
+    def get_projection_map(self) -> dict[str, str] | None:
+        """Return a fresh identity map; None and an empty map remain distinct."""
+        columns = self._projection_columns
+        return None if columns is None else {name: name for name in columns}
+
+    def apply_projection(
+        self, projection_map: dict[str, str] | None
+    ) -> ClickHouseDatasource:
+        """Clone the scan without changing another Dataset branch or its metadata."""
+        if not self.supports_projection_pushdown():
+            raise ConfigurationError("V1 projection is unverified on this Ray release")
+        snapshot = self._ensure_planning_snapshot()
+        available = self._selected_columns(snapshot)
+        columns = (
+            self._projection_columns
+            if projection_map is None
+            else tuple(
+                validate_identifier(name, name="column") for name in projection_map
+            )
+        )
+        unknown = set(columns or ()).difference(available)
+        if unknown:
+            raise ConfigurationError(f"unknown ClickHouse columns: {sorted(unknown)}")
+        clone = copy(self)
+        clone._projection_columns = columns
+        clone._local_sources = tuple(
+            source.apply_projection(projection_map) for source in self._local_sources
+        )
+        return clone
 
     def _ensure_planning_snapshot(self) -> DiscoverySnapshot:
         if self._planning_snapshot is not None:
@@ -302,6 +342,7 @@ class ClickHouseDatasource(Datasource):
             source._planning_snapshot = DiscoverySnapshot(
                 target.schema, "MergeTree", partitions, facts
             )
+            source._projection_columns = self._projection_columns
             sources.append(source)
         return tuple(sources)
 
@@ -317,11 +358,17 @@ class ClickHouseDatasource(Datasource):
                 raise ConfigurationError(
                     f"unknown order_by columns: {sorted(unknown_order)}"
                 )
-        return columns
+        return columns if self._projection_columns is None else self._projection_columns
 
     @property
     def arrow_schema(self) -> pa.Schema:
-        return self._ensure_planning_snapshot().schema.arrow_schema
+        snapshot = self._ensure_planning_snapshot()
+        return pa.schema(
+            [
+                snapshot.schema.arrow_schema.field(c)
+                for c in self._selected_columns(snapshot)
+            ]
+        )
 
     def _make_task(
         self,
@@ -335,13 +382,18 @@ class ClickHouseDatasource(Datasource):
     ) -> ReadTask:
         config = self._config
         snapshot = self._ensure_planning_snapshot()
+        # SQL requires at least one expression. Keep a permitted source column as
+        # the physical row carrier, then let Ray implement the empty projection.
+        scan_columns = columns or (
+            (config.columns or tuple(snapshot.schema.arrow_schema.names))[0],
+        )
         definitions_by_name = {
             column.name: column for column in snapshot.schema.columns
         }
-        selected_definitions = tuple(definitions_by_name[name] for name in columns)
+        selected_definitions = tuple(definitions_by_name[name] for name in scan_columns)
         sql, parameters = build_select(
             table=config.table,
-            columns=columns,
+            columns=scan_columns,
             filter_sql=config.filter_sql,
             parameters=dict(config.query_parameters),
             partition_ids=partition_ids,
@@ -359,25 +411,32 @@ class ClickHouseDatasource(Datasource):
             sql=sql,
             parameters=parameters,
             arrow_schema=pa.schema(
-                [snapshot.schema.arrow_schema.field(column) for column in columns]
+                [snapshot.schema.arrow_schema.field(column) for column in scan_columns]
             ),
             operation="read",
         )
 
         def read_fn() -> Any:
-            yield from stream_query(
+            blocks = stream_query(
                 config.connection,
                 query,
                 config.limits,
                 diagnostic_flush_logs=config.diagnostic_flush_logs,
             )
+            try:
+                for block in blocks:
+                    yield block if columns else empty_projection(block)
+            finally:
+                close = getattr(blocks, "close", None)
+                if close is not None:
+                    close()
 
         return make_read_task(
             read_fn,
             BlockMetadata(
                 num_rows=None, size_bytes=None, exec_stats=None, input_files=None
             ),
-            query.arrow_schema,
+            pa.schema([snapshot.schema.arrow_schema.field(c) for c in columns]),
             per_task_row_limit,
         )
 

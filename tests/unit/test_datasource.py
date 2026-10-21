@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 from unittest.mock import patch
 
 import pyarrow as pa
@@ -8,6 +9,170 @@ from ray_clickhouse._errors import ConfigurationError, DiscoveryError, Permissio
 from ray_clickhouse._models import ClickHouseConnection, QualifiedTable, ResourceLimits
 from ray_clickhouse._schema import SchemaPlan, TargetColumn
 from ray_clickhouse.datasource import ClickHouseDatasource, ClickHouseReadConfig
+
+
+@pytest.fixture
+def projected_source():
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch(
+                "ray_clickhouse.datasource.supports_v1_projection_pushdown",
+                return_value=True,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "ray_clickhouse.datasource.discover_schema", return_value=_schema_plan()
+            )
+        )
+        stack.enter_context(
+            patch("ray_clickhouse.datasource.discover_engine", return_value="MergeTree")
+        )
+        yield ClickHouseDatasource(_config(columns=("id", "value")))
+
+
+def test_projection_clones_keep_order_and_do_not_mutate_other_branches(
+    projected_source,
+):
+    from ray import cloudpickle
+
+    source = projected_source
+    reordered = source.apply_projection({"value": "ignored", "id": "id"})
+    narrow = reordered.apply_projection({"value": "value"})
+    assert reordered.get_projection_map() == {"value": "value", "id": "id"}
+    assert reordered.arrow_schema.names == ["value", "id"]
+    assert narrow.arrow_schema.names == ["value"]
+    assert source.arrow_schema.names == ["id", "value"]
+    assert narrow.config is source.config
+    assert narrow._planning_snapshot is source._planning_snapshot
+    assert narrow._planning_snapshot.schema.arrow_schema.names == ["id", "value"]
+    mapping = narrow.get_projection_map()
+    mapping.clear()
+    assert narrow.get_projection_map() == {"value": "value"}
+    assert narrow.apply_projection(None).arrow_schema == narrow.arrow_schema
+    assert (
+        cloudpickle.loads(cloudpickle.dumps(narrow)).arrow_schema == narrow.arrow_schema
+    )
+    with pytest.raises(ConfigurationError, match="unknown ClickHouse columns"):
+        narrow.apply_projection({"id": "id"})
+
+
+@pytest.mark.parametrize("columns", [("value",), ()])
+def test_projection_task_sql_schema_and_cleanup(projected_source, columns):
+    from ray.data.block import BlockAccessor
+
+    from ray_clickhouse._compat import supports_v1_projection_pushdown
+
+    source = projected_source.apply_projection({c: c for c in columns})
+    closed = []
+    queries = []
+
+    def stream(connection, query, limits, **kwargs):
+        queries.append(query)
+        try:
+            values = {"id": [1, 2, 3], "value": ["a", "b", "c"]}
+            yield pa.table(
+                {c: values[c] for c in query.arrow_schema.names},
+                schema=query.arrow_schema,
+            )
+            raise RuntimeError("stream failed")
+        finally:
+            closed.append(True)
+
+    # Empty block semantics belong to the actual installed Ray contract.
+    if not columns and not supports_v1_projection_pushdown():
+        assert source.get_projection_map() == {}
+        assert source.get_read_tasks(1)[0].schema == pa.schema([])
+        return
+    with patch("ray_clickhouse.datasource.stream_query", stream):
+        task = source.get_read_tasks(1)[0]
+        assert task.schema == source.arrow_schema
+        blocks = iter(task.read_fn())
+        block = next(blocks)
+        assert BlockAccessor.for_block(block).num_rows() == 3
+        if columns:
+            assert BlockAccessor.for_block(block).schema().names == list(columns)
+        else:
+            native = BlockAccessor.for_block(pa.table({"id": [1, 2, 3]})).select([])
+            assert block.schema == native.schema
+        blocks.close()
+        assert closed == [True]
+        assert queries[0].sql.startswith(
+            "SELECT `value` FROM" if columns else "SELECT `id` FROM"
+        )
+        blocks = iter(task.read_fn())
+        next(blocks)
+        with pytest.raises(RuntimeError, match="stream failed"):
+            next(blocks)
+        assert closed == [True, True]
+
+
+def test_projection_preserves_explicit_visibility_and_planning_failures(
+    projected_source,
+):
+    source = ClickHouseDatasource(_config(columns=("id",)))
+    with pytest.raises(ConfigurationError, match="unknown ClickHouse columns"):
+        source.apply_projection({"value": "value"})
+    with patch(
+        "ray_clickhouse.datasource.discover_schema",
+        side_effect=DiscoveryError("bad schema"),
+    ):
+        with pytest.raises(DiscoveryError, match="bad schema"):
+            ClickHouseDatasource(_config()).apply_projection({"id": "id"})
+
+
+def test_projection_keeps_filter_order_and_range_dependencies(projected_source):
+    source = ClickHouseDatasource(
+        _config(
+            filter_sql="id >= %(minimum)s",
+            query_parameters=(("minimum", 1),),
+            order_by=(("id", True),),
+        )
+    ).apply_projection({"value": "value"})
+    with patch("ray_clickhouse.datasource.make_read_task") as make_task:
+        source.get_read_tasks(2)
+        query = _query_from_read_fn(make_task.call_args.args[0])
+        assert query.sql.startswith("SELECT `value` FROM")
+        assert "id >= %(minimum)s" in query.sql
+        assert query.sql.endswith("ORDER BY `id` DESC")
+        assert query.parameter_dict()["minimum"] == 1
+    source = ClickHouseDatasource(_config(split="range", range_column="id"))
+    with patch(
+        "ray_clickhouse.datasource.discover_range_facts",
+        return_value=RangeFacts("id", "UInt64", 10, 0, 0, 9),
+    ):
+        narrow = source.apply_projection({"value": "value"})
+    assert narrow._planning_snapshot.range_facts.column == "id"
+    with patch("ray_clickhouse.datasource.make_read_task") as make_task:
+        narrow.get_read_tasks(2)
+        assert all(
+            "`id` >=" in _query_from_read_fn(c.args[0]).sql
+            for c in make_task.call_args_list
+        )
+
+
+def test_cached_local_sources_are_projected_independently(projected_source):
+    source = projected_source
+    source._ensure_planning_snapshot()
+    child = ClickHouseDatasource(_config())
+    child._planning_snapshot = source._planning_snapshot
+    source._local_sources = (child,)
+    narrow = source.apply_projection({"value": "value"})
+    assert narrow._local_sources[0] is not child
+    assert narrow._local_sources[0].arrow_schema.names == ["value"]
+    assert child.arrow_schema.names == ["id", "value"]
+    assert source._planning_snapshot is narrow._local_sources[0]._planning_snapshot
+
+
+def test_unverified_projection_keeps_legacy_capability():
+    with patch(
+        "ray_clickhouse.datasource.supports_v1_projection_pushdown", return_value=False
+    ):
+        source = ClickHouseDatasource(_config())
+        assert not source.supports_projection_pushdown()
+        with pytest.raises(ConfigurationError, match="unverified"):
+            source.apply_projection({"id": "id"})
+        assert source.get_projection_map() is None
 
 
 def _query_from_read_fn(read_fn):

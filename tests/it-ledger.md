@@ -499,3 +499,60 @@ per-node planning overhead, static topology/security and no shared snapshot.
 The PR-body draft records the completed remote matrix at 2cff914 and separately
 identifies this correction's local evidence. Local validation completed before
 the correction's commit and PR publication; remote outcomes are tracked by PR checks.
+
+## V1 table projection pushdown
+
+Issue #14 is implemented through public V1 Datasource hooks on Ray 2.58.0 and
+2.59.0. Full discovery facts remain separate from ordered output fields; cloned
+local shard sources retain independent projection state. Empty selections use
+the public BlockAccessor to preserve native cardinality. Query reads and the
+dependency window are unchanged.
+
+| Suite | Coverage / environment | Result and evidence |
+| --- | --- | --- |
+| Unit and contract | Python 3.12.12, Ray 2.59.0, PyArrow 19.0.1 | All 558 distinct cases covered: 556 initial passes, the corrected non-nullability assertion passed its targeted rerun, and the subsequently added legacy-gate case passed in the 43-case targeted unit run. Logs: `.artifacts/projection/primary.log`, `primary-correction.log`, `unit-final.log` |
+| Additional Ray contract | Python 3.12.12, Ray 2.58.0; same production source | Four projection/filter cases passed, including native empty materialization and follow-up batch operations. `.artifacts/projection/ray258.log` |
+| Reviewed contract correction | Python 3.12.12, PyArrow 19.0.1; isolated Ray 2.55.0, 2.58.0 and 2.59.0 runtimes | All nine approved targeted cases passed: three per version, zero failures/errors/skips. Final corrected two-stage reference, legacy fallback semantics and strict verified-version schema/cardinality assertions. `.artifacts/projection/compatibility-correction/ray255.xml`, `ray258.xml`, `ray259.xml` and matching logs/version records |
+| Full single-node protocol | ClickHouse 26.8.1.2041, Ray 2.59.0, clickhouse-connect 1.5.0 | 97 passed in the full run; the remaining new ordering case passed targeted verification. 98 distinct cases passed; three established cluster cases were deselected by the single-node profile. `.artifacts/it/projection-single/` and `.artifacts/it/projection-single-final/` |
+| Affected distributed suite | Two ClickHouse shards, two replicas per shard and three Ray nodes; ClickHouse 26.8.1.2041, Linux Python 3.12.14, Ray 2.59.0 | 54 passed, zero skips/errors/failures. All split modes, cached child clones, empty outputs, actual worker data queries and existing local-read regressions. `.artifacts/it/projection-cluster/` |
+| Static, docs and package | Final implementation and documentation | Ruff format/lint, strict mypy, documentation/compatibility/release checks, Sphinx HTML and spelling, source/wheel build and twine check passed |
+
+Data-query assertions inspect `system.query_log`, excluding DESCRIBE and zero-row
+schema probes, to prove column pruning. Value assertions cover Date, Decimal,
+NULL, requested column order and filters using non-output keys. Empty/nonempty
+tables and all four split modes retain native row counts after materialization.
+The initial source schema is still validated before Ray optimization.
+
+The production code remained unchanged throughout final contract and database
+validation. The first contract comparison incorrectly adopted Ray Project's
+relaxed nullability; its correction independently requires the original
+ClickHouse non-nullable field. The ordering IT was corrected to recognize the
+driver's appended ArrowStream FORMAT and to compare exact rows independently of
+Ray's default filtered-block completion order. Initial validation reran only
+failed cases; no passed full infrastructure suite was repeated. The distributed run also passed
+the stronger delivery-order assertion, so its unchanged production/SQL/value
+evidence remains valid after that test-only correction.
+
+Complete static review later identified that the projection contract test
+unconditionally required an empty schema on Ray 2.55.0, whose native empty
+projection retains original columns. The corrected test gives both paths the
+same two selections and compares native schema, values, row counts and follow-up
+batch counts on each runtime. Nonempty projections still require requested
+column order and, on enabled versions, original non-nullable fields. Enabled
+versions also require empty output with three rows. The legacy path still must plan all source
+columns. No skip or capability-window change was introduced.
+
+The user explicitly approved rerunning these nine cases because the reference
+pipeline and schema/cardinality assertions changed. Every version ran its three
+cases exactly once on the corrected test. Production hashes stayed unchanged;
+the existing ClickHouse and distributed results are reused without rerunning
+those suites. Ruff format/lint, diff checks and cumulative static self-review
+passed, resolving the review finding.
+
+The Docker scripts captured image/container baselines and removed their own
+Compose projects and temporary runtime image. Existing base images and other
+projects were retained. Initial per-file source/test hashes are recorded in
+`.artifacts/projection/final-source-hashes.json`; the corrected source/test hashes
+are in `.artifacts/projection/compatibility-correction/source-hashes.json`.
+Execution details and requirement traceability are in
+`~/GitHub/plans/ray-clickhouse-projection-pushdown.md`.
