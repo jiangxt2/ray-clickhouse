@@ -91,8 +91,32 @@ Partition, range and auto plans reuse local planners. `target_tasks`, `max_tasks
 and Ray parallelism limit the total task count; a task may run several scans
 sequentially. Task row limits apply across all scans in that task.
 
-Only physical scalar comparisons, NULL tests, value bindings and Boolean
-composition are eligible. Missing filters, functions, virtual columns, computed
+Eligible predicates include physical scalar comparisons, NULL tests, value
+bindings and Boolean composition, plus these constant-operand forms and their
+`NOT` variants:
+
+- `id BETWEEN {lo:Int64} AND {hi:Int64}`: a physical scalar column and two
+  constant bounds.
+- `txt LIKE {pattern:String}`: a physical String/FixedString column (including
+  supported Nullable/LowCardinality wrappers) and a fixed string pattern.
+  `%`, `_` and backslash escaping retain their ClickHouse meanings.
+- `id IN ({one:Int64}, {two:Int64})`: a physical scalar column and a nonempty
+  parenthesized list of scalar constants or individually bound values.
+
+String/number/Boolean/NULL literals and existing scalar value bindings are
+recognized without evaluating or rewriting them. All conditions can combine
+with `AND`, `OR`, `NOT` and parentheses. The original SQL and bindings reach
+ClickHouse, which retains its native type conversion and NULL semantics.
+For a filter without client-side placeholders, generated split constraints use
+native bindings so literal percent signs and placeholder-looking strings remain
+unchanged. Explicit client-side placeholders retain their existing protocol.
+For client-side bindings, bind a LIKE pattern through `%(pattern)s` rather than
+mixing an unescaped literal `%` with other client placeholders.
+
+Subqueries, `GLOBAL IN`, external sets, tuple/array list forms, column-dependent
+LIKE patterns, `ILIKE` and custom `ESCAPE` clauses are outside local conversion.
+The public `filter` continues to reject SELECT subqueries before planning.
+Missing filters, functions, virtual columns, computed
 aliases, global ordering, row policies, unsafe settings/options, nested targets,
 or missing required metadata capabilities use the original logical single
 query. Query mode rejects the flag. Real authentication, permission, connection,

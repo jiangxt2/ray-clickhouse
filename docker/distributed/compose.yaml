@@ -4,7 +4,7 @@ x-clickhouse: &clickhouse
     CLICKHOUSE_DB: ray_clickhouse_it
     CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
   networks: [rayclickhouse]
-  mem_limit: 1g
+  mem_limit: 2g
   volumes:
     - ../distributed/config.xml:/etc/clickhouse-server/config.d/distributed.xml:ro
     - ../distributed/users.xml:/etc/clickhouse-server/users.d/distributed.xml:ro

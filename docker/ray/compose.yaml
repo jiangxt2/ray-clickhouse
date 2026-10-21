@@ -33,6 +33,17 @@ services:
     <<: *ray-common
     hostname: ray-head
     mem_limit: 4g
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+            import urllib.request;
+            urllib.request.urlopen("http://127.0.0.1:8265/api/version", timeout=2).close()
+      interval: 2s
+      timeout: 5s
+      retries: 60
     networks:
       rayclickhouse:
         ipv4_address: 10.250.0.10
