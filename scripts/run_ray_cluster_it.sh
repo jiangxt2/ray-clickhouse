@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-project_name="ray-clickhouse-cluster-it"
+project_name="${RAY_CLICKHOUSE_CLUSTER_PROJECT:-ray-clickhouse-cluster-it}"
 compose_file="docker/ray/compose.yaml"
 artifact_dir="${RAY_CLICKHOUSE_CLUSTER_IT_ARTIFACT_DIR:-.artifacts/it/ray-cluster}"
 ray_base_source="${RAY_CLICKHOUSE_RAY_BASE_SOURCE:-docker.m.daocloud.io/rayproject/ray@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5}"
@@ -11,6 +11,12 @@ runtime_image="${RAY_CLICKHOUSE_CLUSTER_RUNTIME_IMAGE:-ray-clickhouse-cluster-it
 mkdir -p "$artifact_dir"
 export RAY_CLICKHOUSE_CLUSTER_RUNTIME_IMAGE="$runtime_image"
 compose=(docker compose --project-name "$project_name" --file "$compose_file")
+if [[ -n "${RAY_CLICKHOUSE_CLUSTER_COMPOSE_EXTRA:-}" ]]; then
+    compose+=(--file "$RAY_CLICKHOUSE_CLUSTER_COMPOSE_EXTRA")
+fi
+if [[ -n "${RAY_CLICKHOUSE_IT_TLS_DIR:-}" ]]; then
+    compose+=(--file docker/distributed/tls-compose.yaml)
+fi
 compose_owned=0
 runtime_image_owned=0
 
@@ -23,6 +29,8 @@ record_docker_state() {
     env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
         -u http_proxy -u https_proxy -u all_proxy \
         docker system df >"$artifact_dir/docker-system-df-$phase.txt"
+    docker ps --all --no-trunc --format '{{.ID}} {{.Names}} {{.Status}}' \
+        >"$artifact_dir/docker-containers-$phase.txt"
 }
 
 cleanup() {
@@ -64,6 +72,21 @@ cleanup() {
 trap cleanup EXIT
 
 record_docker_state before
+python3 - "$artifact_dir/source-state.txt" <<'STATE'
+import ast
+import hashlib
+import pathlib
+import sys
+h = hashlib.sha256()
+for root in ("src", "tests", "docker", "scripts"):
+    for path in sorted(pathlib.Path(root).rglob("*")):
+        if path.is_file() and "__pycache__" not in path.parts:
+            if path.suffix == ".py":
+                ast.parse(path.read_bytes(), filename=str(path))
+            h.update(str(path).encode())
+            h.update(path.read_bytes())
+pathlib.Path(sys.argv[1]).write_text(h.hexdigest() + "\n")
+STATE
 if env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
     -u http_proxy -u https_proxy -u all_proxy \
     docker image inspect "$runtime_image" >/dev/null 2>&1; then
@@ -81,7 +104,10 @@ runtime_image_owned=1
 
 env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
     -u http_proxy -u https_proxy -u all_proxy \
-    docker pull "$ray_base_source" 2>&1 | tee "$artifact_dir/ray-base-pull.log"
+    docker image inspect "$ray_base_source" >/dev/null 2>&1 || \
+    env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+        -u http_proxy -u https_proxy -u all_proxy \
+        docker pull "$ray_base_source" 2>&1 | tee "$artifact_dir/ray-base-pull.log"
 env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
     -u http_proxy -u https_proxy -u all_proxy \
     docker image inspect "$ray_base_source" \
@@ -122,13 +148,26 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
     "${compose[@]}" up --detach --wait --no-build
 
 set -o pipefail
-runtime_env_json='{"env_vars":{"RAY_CLICKHOUSE_IT_HOST":"clickhouse","RAY_CLICKHOUSE_IT_PORT":"8123","RAY_CLICKHOUSE_IT_DATABASE":"ray_clickhouse_it","RAY_CLICKHOUSE_IT_RAY_ADDRESS":"10.250.0.10:6379","RAY_CLICKHOUSE_IT_MIN_NODES":"3","PYTHONPATH":"./src:./tests","RAY_USAGE_STATS_ENABLED":"0"}}'
+runtime_env_json='{"env_vars":{"RAY_CLICKHOUSE_IT_HOST":"clickhouse","RAY_CLICKHOUSE_IT_PORT":"8123","RAY_CLICKHOUSE_IT_DATABASE":"ray_clickhouse_it","RAY_CLICKHOUSE_IT_RAY_ADDRESS":"10.250.0.10:6379","RAY_CLICKHOUSE_IT_MIN_NODES":"3","RAY_CLICKHOUSE_IT_DISTRIBUTED":"1","PYTHONPATH":"./src:./tests","RAY_USAGE_STATS_ENABLED":"0"}}'
+pytest_targets=("$@")
+if [[ "$#" -eq 0 ]]; then
+    pytest_targets=(tests/integration)
+fi
 env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
     -u http_proxy -u https_proxy -u all_proxy \
     "${compose[@]}" exec -T runner ray job submit \
     --address=http://10.250.0.10:8265 \
     --working-dir=/workspace/ray-clickhouse \
     --runtime-env-json="$runtime_env_json" \
-    -- python -m pytest tests/integration -m integration -vv \
+    -- python -m pytest "${pytest_targets[@]}" -m "${RAY_CLICKHOUSE_CLUSTER_PYTEST_MARKER:-integration}" -vv \
     --junitxml=/workspace/ray-clickhouse/cluster-pytest.xml \
     2>&1 | tee "$artifact_dir/pytest.log"
+# A stopped Ray job can return a successful CLI status without finishing pytest.
+# Require a completed report before treating the run as successful.
+"${compose[@]}" exec -T ray-head python -c '
+import xml.etree.ElementTree as ET
+root = ET.parse("/workspace/ray-clickhouse/cluster-pytest.xml").getroot()
+suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+assert sum(int(s.get("tests", 0)) for s in suites) > 0, "No tests completed"
+assert not any(int(s.get("errors", 0)) or int(s.get("failures", 0)) for s in suites), "Test failures"
+'

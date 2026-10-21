@@ -8,7 +8,7 @@ The driver discovers schema and engine capabilities and constructs immutable tas
 
 ## Read path
 
-The default `split="single"` path executes one ClickHouse data query without COUNT, size, or sample planning queries. Optional partition and integer-range splits apply only to validated local MergeTree-family tables. Views and Distributed tables are single-query-only; MaterializedView is outside the public profile.
+The default `split="single"` path executes one ClickHouse data query without COUNT, size, or sample planning queries. Optional partition and integer-range splits apply only to validated local MergeTree-family tables. Views are single-query-only; Distributed tables use a single query unless the filtered local-read option is enabled; MaterializedView is outside the public profile.
 
 Reads yield bounded Arrow blocks controlled by `batch_rows` and `batch_bytes`. A single indivisible oversized row can exceed the byte target. Multiple independent read tasks do not share a ClickHouse snapshot.
 
@@ -51,6 +51,58 @@ discovery and worker queries, including generated partition/range constraints.
 Generated integer endpoints use Int128 to represent exclusive Int64/UInt64
 maximum-plus-one boundaries. The caller's parameter types are preserved.
 
+### Filtered Distributed local scans
+
+`convert_distributed_to_local=False` preserves the existing path without new
+cluster queries. When enabled, a Distributed table with an explicit eligible
+filter can resolve to one fixed replica of every shard. Ordinary Views remain
+logical queries. Global ordering, query sources, nested Distributed targets,
+functions and unsupported contexts are outside this conversion profile.
+
+The driver reads field names and declarations separately on the entry node and
+each selected replica. It uses explicit projections and named result mapping:
+
+| Information | Priority | Missing capability |
+| --- | --- | --- |
+| Engine target | `system.tables.engine_full`, then `create_table_query`, then SHOW CREATE ENGINE fragment | Whole-source logical fallback |
+| Cluster identity | `system.clusters.cluster`, then its `name` alias | Whole-source logical fallback |
+| Topology | Explicit shard, replica, hostname and user fields | Whole-source logical fallback |
+| Columns | `system.columns`, then named structured DESCRIBE | Whole-source logical fallback |
+| Arrow schema | Independent zero-row probe using the existing type/projection validator | Schema error on disagreement |
+| Partition constraints | Active `system.parts.partition_id` | Local single scan or existing strict split error |
+| Grouping weight | `bytes_on_disk`, then `rows`, then equal weights | No loss of shard coverage |
+| Automatic range key | `system.tables.sorting_key` | Local single scan or existing strict split error |
+| Settings and policies | Structured effective settings and visible row-policy metadata | Whole-source fallback on confirmed capability absence; errors remain errors |
+
+System-table field probes prefer `system.columns`; confirmed unsupported
+metadata can use structured DESCRIBE. Extra fields are ignored. Known fields
+with invalid types or values are errors. Permission or connection failures do
+not select another origin. Empty metadata is accepted only where visibility is
+proven and emptiness is meaningful. View dependency arrays never map Distributed
+targets. Version strings do not participate in planning.
+Native DESCRIBE verifies the complete field-name set and whole-table visibility.
+Only consumed field declarations participate in type agreement; formatting of
+unused complex fields can differ between native metadata sources.
+Business column declarations compare tokens, ignoring whitespace outside quoted
+literals and identifiers. Tuple field names, widths, precision, timezones and
+enum values remain significant; declarations and queries are not rewritten.
+
+Column declarations and Arrow fields match by name; output follows the source
+projection order. Source aliases are conservatively ineligible. Scalar predicate
+text and bindings are preserved. No sharding expression is computed in Python.
+
+Resolved topology, capabilities, selected origins and split facts are cached;
+Ray parallelism determines fresh task groups on each call. Local datasource
+planners and the shared SQL/Arrow stream construct the scans. One task may run
+multiple scans under the global budget, sharing its row limit and stopping
+before subsequent scans when closed. Selected replicas and endpoints remain
+fixed for retries. There is no worker-time logical fallback or replica failover.
+
+No mandatory Distributed-versus-local count scan is added. Range planning keeps
+its existing aggregates. Independent planning and reads share no snapshot, and
+equal counts do not establish equal row multisets. Tests wait for replication
+and compare complete stable results, including duplicate multiplicity.
+
 ### Query result source
 
 A query source uses the same public Ray Datasource/ReadTask contract and bounded
@@ -74,4 +126,4 @@ Ray task retries are forced to zero through the public facade. Transport failure
 
 ## Non-goals
 
-The connector does not provide unrestricted statement execution, arbitrary DDL, delete, update, upsert, cross-task transactions, snapshot isolation, exactly-once writes, or connector-side Distributed shard routing.
+The connector does not provide unrestricted statement execution, arbitrary DDL, delete, update, upsert, cross-task transactions, snapshot isolation, exactly-once writes, or write-side Distributed shard routing.

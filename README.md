@@ -18,8 +18,8 @@ This release provides:
 - fail-closed schema, type, permission, timeout, and ambiguous-write errors.
 
 The connector does not provide arbitrary SQL execution, arbitrary DDL, delete, update, upsert,
-connector-side Distributed shard routing, cross-task transactions, or exactly-once guarantees.
-Distributed reads use one ClickHouse query; ClickHouse owns shard routing.
+write-side Distributed shard routing, cross-task transactions, or exactly-once guarantees.
+Distributed reads use one ClickHouse query by default.
 
 Automatic range planning is opt-in. For a direct MergeTree-family table with a
 simple sorting key starting with an integer column, use `split="auto"` to select
@@ -60,6 +60,50 @@ classes are internal and are not independent compatibility promises.
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 - [Release notes](release-notes/v1.1.md)
+
+## Filtered Distributed local reads
+
+Set `convert_distributed_to_local=True` to attempt direct local scans of a
+single-layer Distributed table with an explicit `filter`:
+
+```python
+dataset = read_clickhouse(
+    host="clickhouse.example",
+    database="analytics",
+    table="events",
+    filter="tenant_id = {tenant:UInt64}",
+    query_parameters={"tenant": 42},
+    convert_distributed_to_local=True,
+    split="partition",
+    target_tasks=4,
+)
+```
+
+This opt-in profile requires a trusted static self-managed cluster, reachable
+shard hostnames, a matching cluster query identity, and a uniform HTTP/HTTPS
+port, credentials and TLS configuration.
+The connector discovers explicit engine targets, validates every selected node,
+and pins one replica per shard. It inherits the caller's HTTP port; the native
+TCP port in `system.clusters` is never used as an HTTP port.
+
+`split="single"` means one data query per shard when conversion succeeds.
+Partition, range and auto plans reuse local planners. `target_tasks`, `max_tasks`
+and Ray parallelism limit the total task count; a task may run several scans
+sequentially. Task row limits apply across all scans in that task.
+
+Only physical scalar comparisons, NULL tests, value bindings and Boolean
+composition are eligible. Missing filters, functions, virtual columns, computed
+aliases, global ordering, row policies, unsafe settings/options, nested targets,
+or missing required metadata capabilities use the original logical single
+query. Query mode rejects the flag. Real authentication, permission, connection,
+missing-target and schema errors raise. Once local tasks start, there is no full
+Distributed retry or replica switch.
+
+Metadata is selected by field capabilities, not parsed server versions. Required
+permissions and supported settings are described in [Security](doc/source/security.md).
+There is no shared snapshot or count-based consistency guarantee. Use stable
+source data for exact comparisons. See [Architecture](doc/source/architecture.md)
+for metadata priorities and fallback boundaries.
 
 ## Query result reads
 

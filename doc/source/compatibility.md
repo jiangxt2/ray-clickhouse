@@ -24,3 +24,37 @@ Ray's `ReadTask` and Datasink lifecycle are DeveloperAPI contracts. Version-spec
 All connector exceptions derive from `RayClickHouseError`. Configuration and connection setup use `ConfigurationError`, `AuthenticationError`, `PermissionError`, and `ObjectNotFoundError`. Discovery and conversion use `DiscoveryError` and `SchemaError`. Data-path failures use `TransportError`, `ReadError`, and `WriteError`.
 
 `AmbiguousWriteError` is a `WriteError` for an INSERT whose final server outcome is unknown. `AmbiguousTableManagementError` is a `WriteError` for generated table management that may have completed only partially. Callers must reconcile either ambiguous result before deciding whether another mutation is safe.
+
+## ClickHouse metadata compatibility
+
+Filtered Distributed conversion uses node capabilities rather than version
+thresholds. Equivalent metadata origins may differ between nodes, but required
+fields, declarations, schema and effective context must satisfy the same
+contract. Native metadata operations enforce privileges without CHECK GRANT or
+textual grant/role inference. System-table policy inventory is checked against
+independent native enumeration after neutral result settings are verified.
+Policy/grant configuration must remain static for the planned read; this is not a
+security metadata snapshot. Unsupported mandatory capabilities select the logical source before
+execution. Invalid metadata and real access or transport failures raise.
+
+`./scripts/run_distributed_it.sh` starts two shards with two replicas each,
+Keeper, HTTPS and three Ray nodes. Set `RAY_CLICKHOUSE_IT_IMAGE` to a fixed
+compatible image reference and use `RAY_CLICKHOUSE_IT_BASELINE` to keep separate
+artifacts. Run a minimal distributed suite on extra server baselines; do not
+repeat the entire protocol suite for each image. Runtime version and image
+identity belong in the test evidence, independently of capability decisions.
+
+Local ARM64 validation covers ClickHouse 23.3.22.3, 24.8.14.39, 25.8.14.17,
+25.12.2.54 and 26.8.1.2041. Each baseline covers 47 distributed cases, including
+four split modes, two replicas per shard, native role authorization, SQL/XML
+policies, metadata filtering, HTTPS and actual reads on both Ray workers.
+Old-baseline evidence combines unchanged passed cases with targeted validation
+after relevant fixes. The 26.8 primary run also covers the three existing cluster
+cases and all 85 protocol cases, once, in a 135-case report. This does not claim
+all 23.x patches, arbitrary mixed-version clusters or Cloud are validated.
+
+Review corrections add 12 distributed regressions for effective aggregate/sort
+profiles, named Tuple display equivalence and strict differences, target catalog
+filtering and native visibility. Each older baseline passed those cases plus
+the existing real missing-target case. The final 26.8 combined run passed all
+147 cases: 59 distributed, three legacy cluster and 85 protocol cases, once.

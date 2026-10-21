@@ -140,3 +140,362 @@
 User-approved development identity `1.1.dev0` on 2026-10-13; source-state SHA-256 excluding this ledger: `423f956212fdd4b677a75c2e1e6825480088faa1cd083d7e7d9ff5eaa5772302`. Primary runtime: Python 3.12.12 / Ray 2.59.0. Full unit suite: 410 passed, zero skipped; Ruff format/lint, mypy, workflow/version policies and strict documentation/spelling passed. Wheel/sdist build, Twine checks and isolated non-editable installs passed, with exact development metadata, public imports, dependency checks and production source-byte comparisons. Logs, artifact hashes and XML: `/tmp/ray-259-development-versions-20261013/`.
 
 This follow-up changes version metadata, release/CI validation and direct regressions, with no additional data-path or test-infrastructure change. Retain the recorded functional contracts and real database/cluster IT; no such IT was rerun. It does not certify an exact published release SHA or a remote Actions run. No commit, push or publication performed.
+
+## Filtered Distributed local reads
+
+Scope: Issue #19, `distributed-local-read`, base `8713697`. Primary runtime:
+Python 3.12.12, Ray 2.59.0, PyArrow 19.0.1, clickhouse-connect 1.5.0, ARM64.
+The user authorized development, real infrastructure tests and multiple cached
+ClickHouse images on 2026-10-20. Tests use two shards with two replicas each,
+Keeper and three Ray nodes, with per-run generated HTTPS certificates.
+
+| Suite | Scope and result | Evidence |
+| --- | --- | --- |
+| Unit/contract without Ray runtime | 475 passed; 6 Ray-marked cases deliberately assigned to their separate runtime suite | `.artifacts/unit-final.xml` |
+| Public Ray runtime contracts | 6 passed; exact existing read/write/empty-Dataset contracts; first sandbox attempt could not enumerate processes, then only these six cases ran with host access | `.artifacts/ray-contract.xml` |
+| ClickHouse 26.8.1.2041 protocol | 85 passed; 3 cluster cases selected by the disjoint cluster suite, no skipped tests | `.artifacts/it/single-26.8/pytest.xml` |
+| ClickHouse 26.8.1.2041 distributed/cluster | 35 passed (32 new distributed cases and 3 existing cluster cases); 85 protocol cases deselected to avoid duplicate evidence | `.artifacts/it/distributed-26.8-complete/pytest.xml` |
+| ClickHouse 25.12.2.54 distributed | 32 passed; same local-read contracts without repeating protocol regression | `.artifacts/it/distributed-25.12-final/pytest.xml` |
+| ClickHouse 25.8.14.17 distributed | 33 passed; the 32 shared cases plus the new structured-privilege capability smoke | `.artifacts/it/distributed-25.8-final/pytest.xml` |
+| ClickHouse 24.8.14.39 capability fallback | 1 passed; real CHECK GRANT syntax absence, complete logical-source row multiset and exactly one logical task | `.artifacts/it/distributed-24.8-capability/pytest.xml` |
+| Additional 26.8 edge cases | 2 passed: actual missing selected target and the new positive privilege-capability smoke; no full-suite repeat | `.artifacts/it/distributed-26.8-final-edge/pytest.xml` |
+
+The shared distributed cases verify all four split modes, task budgets of one
+and four, one fixed replica per shard, complete row multisets with duplicates
+and NULLs, empty shards, source projection order, cache regrouping and task row
+limits. Query-log assertions check initial local data queries on selected hosts
+and their absence on unselected replicas. Other cases cover real row-policy
+fallback, denied policy visibility, schema drift, partial-output transport
+failure, early generator closure, HTTPS on workers, hostname mismatch, missing
+worker password environment, metadata-origin fallthrough and optional split or
+weight capability loss. Capability differences are injected per node while
+queries, declarations and Arrow probes still use the real servers. This does
+not claim arbitrary mixed-version cluster or Cloud compatibility.
+
+### Capability differences and bounded measurements
+
+No server version string participates in planning. Real 24.8 rejects the fixed
+CHECK GRANT statement with code 62 and has no isGranted SQL function. The
+connector recognizes that exact missing capability and falls back as a whole;
+permission denials, malformed metadata and transport failures remain errors.
+25.8, 25.12 and 26.8 execute the local path. Effective parallel-replica controls
+are selected by available fields, including the legacy control when the newer
+field is absent; max_parallel_replicas alone is not an enablement proof.
+
+The bounded 22-row comparison is recorded as JUnit properties, including actual
+server version, planning and scan durations. On 26.8 it measured approximately
+23ms logical planning / 11ms reading and 115ms local planning / 16ms reading.
+This small fixture proves path/cost observability, not a throughput advantage.
+There is no snapshot or count-equality correctness claim.
+
+### Diagnostic attempts and evidence reuse
+
+Diagnostic failures are not counted as passed coverage. Separate artifacts
+retain the initial invalid Compose name, CHECK GRANT command-result handling,
+empty Native result headers, a test-script edit during execution, default
+settings representation, query-log suffix matching, test collection indentation,
+and the duplicate Ray fixture initialization. The last of those ran 30 new
+cases successfully but failed the first original cluster setup. The final
+35-case cluster run includes the fixture fix and relevant metadata/unknown-stat
+changes. No successful full suite was repeated on unchanged applicable state.
+
+The subsequent production change only recognizes code 62 for connector-owned
+CHECK GRANT syntax; it leaves every successful probe path unchanged. Preserve
+the 26.8/25.12 positive-path results and separately prove the new missing-capability
+branch on 24.8, its positive branch on 25.8, and the new edge cases on 26.8.
+Later CI wiring, additional tests and documentation do not trigger protocol
+repeats. Source-state fingerprints, runtime image identity, pytest and Compose
+logs and Docker before/after snapshots are stored beside each suite's XML.
+All test-created project resources and runtime images are cleaned by their
+owning script; cached base images and unrelated infrastructure are retained.
+Static checks, package build/Twine and strict docs/spelling pass locally; no
+commit, push, PR, Issue update or remote CI execution is claimed.
+
+Final evidence index: `.artifacts/it/distributed-local-read-results.json` includes
+all successful XML reports and the final production-source digest. The final
+wheel contains byte-identical copies of all 15 Python production modules;
+wheel/sdist Twine checks pass. Final resource inspection found no test project
+containers or temporary runtime image tags, and no newly dangling image IDs.
+Canonical `master` remains clean. The local worktree is ready for user review;
+no Git commit or external mutation has been performed.
+
+## Structured metadata compatibility investigation
+
+User authorization: pull a fixed ClickHouse 23.3 server image and verify the
+compatibility approach, prioritizing structured system tables over SQL parsing.
+Scope is isolated research probes and evidence; no connector implementation
+change is included in this investigation.
+
+| Suite | Environment and code state | Purpose and non-overlap | Status |
+| --- | --- | --- | --- |
+| Metadata/security capability probes | Fixed 23.3.22.3 ARM64 image; two fresh servers with select_from_system_db_requires_grant true/false; probe source under `.artifacts/metadata-compat/` | Verify actual metadata, grants via active/default roles, column hiding, SQL/XML policy inventory, policy metadata filtering and query permission enforcement; no repeated connector or Ray suites | Planned |
+| Same structured-contract probes | Cached 24.8.14.39 ARM64 image; true/false settings in separate fresh servers | Verify the candidate contract is shared across old baselines; previous 24.8 test only proved CHECK GRANT fallback | Planned |
+
+Before running, record probe/config hashes, image identity, container and dangling
+image baselines. Retain per-case JSON and server logs. Cleanup targets only the
+containers and volumes created by the probe runner. Downloaded base images are
+retained. No global Docker cleanup or external Git operation is authorized.
+
+First structured-probe run: 23.3 executed 86 checks, 84 passed; two XML checks
+incorrectly assumed the diagnostic storage label was `users_xml`, while the
+real server returned `users.xml`. All authorization, filtering, inventory and
+four-split prototype checks passed in both configuration modes. 24.8 passed all
+86 original checks. The XML assertion is being replaced by the stronger
+structured applicability/scope and actual filtered-row contract; storage labels
+remain diagnostics. Run only the new focused XML checks on both baselines to
+verify this change; retain the already-passed full-probe evidence. Initial 23.3
+image inspection failed before container creation after the pulled digest was
+no longer in the local inventory; recovery pulled the same fixed version,
+verified its ARM64 identity and retained explicit version tags.
+
+### Verified compatibility findings
+
+Evidence index: `.artifacts/metadata-compat/findings.json`. Actual servers report
+23.3.22.3 and 24.8.14.39. Each baseline ran both explicit true/false system-table
+grant configurations. Both reject CHECK GRANT with code 62. The probes proved
+native role inheritance and disabled-role/revocation enforcement, table-level
+DESCRIBE denial versus partially visible system.columns rows, and complete
+SQL/XML policy representation through the same structured system table.
+
+A successful system.row_policies SELECT can be filtered to zero rows even with
+SHOW ROW POLICIES permission. Plain SHOW ROW POLICIES shares that filtering.
+In both baseline/configuration pairs, direct SHOW CREATE ROW POLICIES ON *.*
+still returned the complete policy inventory while the protected SELECT
+returned zero. Direct SHOW CREATE enumerates AccessControl independently. Its
+row count can be compared with the unfiltered structured policy inventory and
+unique UUID count without parsing returned CREATE SQL. Under static policy/grant
+configuration and verified neutral result settings, both enumerate the same
+underlying set and row-policy filtering can only remove structured rows.
+Counts here establish metadata-list completeness; they do not establish equality
+between Distributed and local data. Permission failures or inventory disagreement
+remain errors. Result-affecting settings, especially additional_result_filter
+and result truncation, must be checked before trusting metadata completeness.
+
+For the four-split feasibility probe, only this research process substituted
+CHECK GRANT with real DESCRIBE/SHOW CREATE metadata operations and the independent
+policy inventory check. The existing datasource then completed single,
+partition, range and auto local reads on both baselines and both configuration
+modes, preserving the duplicate row. These were one-shard, one-server probes;
+they do not claim formal implementation or full multi-shard/Ray compatibility.
+No production connector source changed. Existing engine-target SQL parsing is
+still used; no new policy/grant SQL parser was introduced.
+
+The two old XML diagnostic assertions were superseded by focused probes proving
+the configured user's actual filtered result, structured apply_to_list/scope,
+and independent inventory completeness. Each baseline passed eight focused
+assertions. No successful full-probe suite was repeated. Preserve the original
+23.3 checks and their incorrect-label failures as diagnostic evidence.
+
+## Formal native metadata conversion
+
+Authorized 2026-10-20: replace CHECK GRANT with native operations, update the
+design, prove old baselines through real multi-shard/replica and Ray execution,
+and regress existing baselines. Production changes enforce whole-table DESCRIBE,
+cross-check system.columns, validate effective settings before policy inventory,
+and compare structured UUID inventory against direct native enumeration. No
+policy/grant SQL parser or new public option is introduced. The static metadata,
+ACL and policy assumption applies throughout planning.
+
+| Suite | State / scope | Reason and overlap | Result |
+| --- | --- | --- | --- |
+| Unit/contract and quality | Final local Python 3.12; production/type/docs/package checks | Includes new native operation, completeness and ordering boundaries; no container overlap | 490 non-Ray cases plus six separate local-Ray contracts passed; quality checks passed |
+| Protocol | 26.8.1.2041; 85 non-cluster integration cases | Final primary invocation selected integration, so these ran once in the combined primary report; no separate protocol rerun | All 85 passed within the 135-case primary report |
+| Primary distributed/Ray | 26.8.1.2041; 47 distributed plus three legacy cluster and 85 protocol cases | Two shards, two replicas each, Keeper, HTTPS, three Ray nodes; both system-table grant modes on different nodes | 135 passed, zero skipped, 83.51s |
+| Legacy distributed/Ray | 23.3.22.3 and 24.8.14.39 | Reuse unaffected successes and add only changed/new context, cache and security cases; case-level mapping records all final coverage | Each covers all 47 final distributed cases, zero unresolved failures or skipped coverage |
+| Existing baseline regression | 25.8.14.17 and 25.12.2.54; same distributed suite | Each final suite once after relevant fixes; no repeated protocol suites | Each 47 passed, zero skipped |
+
+Each runner records exact source/test/config fingerprint, image IDs, XML, pytest
+and Compose logs and Docker before/after snapshots. Container runs are serial
+because the existing Ray fixture uses a fixed subnet. Failed tests retain their
+reports; only root-cause fixes justify affected reruns. Test-owned runtime images
+and project resources are removed by trap; cached base images are retained.
+
+23.3 attempt `native-23.3-v1` stopped after fixture errors: a YAML anchor override
+replaced the source node's volume list, losing the common Keeper/topology config.
+Server logs show NO_ZOOKEEPER (225). No conversion success is claimed. Correct
+the fixture by retaining common config/users mounts, add a structural unit
+regression, and rerun the failed 23.3 suite with fail-fast diagnostics. This is
+an infrastructure change and failure recovery, not a repeat of a passed suite.
+The original source fingerprint and Compose/pytest logs are retained.
+
+23.3 `native-23.3-v2`: 17 passed, then the cluster-name capability injection
+assertion failed. Real 23.3 exposes cluster without the newer name alias; after
+removing cluster, whole-source fallback was correct. Update the test to assert
+the actual field-dependent contract and full filtered multiset. Production is
+unchanged. Retain the 17 passes and run only the failed and unexecuted cases;
+do not repeat the successful split/origin cases. The first unit-suite invocation
+used the pytest entrypoint and failed collection of tools imports; corrected
+python -m pytest passed 484 non-Ray cases, with six Ray cases reserved separately.
+
+23.3 `native-23.3-v3`: 24 additional cases passed, including both Ray workers,
+HTTPS, both system grant modes, inherited/disabled/revoked roles, filtered policy
+inventory, partial column visibility and XML policy behavior. One fixture tried
+GRANT ALL, which the old default admin cannot delegate in full. Replace it with
+the exact SELECT / SHOW COLUMNS / SHOW ROW POLICIES privileges needed by that
+test. Production remains unchanged. Only that failed test and the unexecuted
+target-missing test remain; preserve the 41 distinct successful cases.
+
+23.3 `native-23.3-v4`: both remaining cases passed, zero skipped. The combined
+v2/v3/v4 reports cover all 43 distinct distributed tests with no remaining
+failure. Test-only fixture corrections did not change production code or the
+previously passed cases. Both true/false system-table grant modes and the
+three-node Ray / two-shard / two-replica topology are now formally verified.
+Proceed with one final 43-case run on each remaining baseline; the 26.8 primary
+also selects the three disjoint legacy cluster tests. No protocol suite repeats
+on additional versions.
+
+24.8 `native-24.8`: all 43 distributed tests passed, zero skipped (13.06s),
+including local conversion, both grant modes and real worker/shard placement.
+The six separate public local-Ray contracts also passed (7.66s).
+
+Static self-review found a pre-existing initial-implementation cache edge: target
+resolution was stored before strict split preparation finished. A later planning
+attempt could retain it after a NotApplicable result. Publish targets and child
+datasources together only after successful preparation. Add a unit case and
+extend the strict optional-split IT to prove failed state is empty, repeat errors
+stay errors, and a new ineligible context selects the logical source. This
+production change affects failure-cache lifecycle, not native metadata success
+paths. Run only the changed IT case once on 23.3 and 24.8; retain all unchanged
+43-case metadata evidence. Remaining baseline suites run the final cache fix.
+
+The changed failure-cache IT passed once on each old baseline (`native-23.3-cache`
+and `native-24.8-cache`), zero skipped. Final review also extends policy scope to
+the discovery system tables themselves: complete policy inventory must not permit
+filtered clusters/parts to silently omit work. Add real filtered-cluster and
+filtered-parts cases, and require throwing read/timeout overflow modes before
+inventory checks. Strengthen the profile-setting test with direct context failure
+so cluster identity mismatch cannot hide a missed setting check. Each old
+baseline receives only these changed/new security cases plus one native local
+positive smoke. The remaining three baselines run all 47 final distributed
+cases; the primary also runs the three existing cluster cases. This is affected
+production/context coverage, not a repeated unchanged full suite.
+
+Both final old-baseline security selections passed six cases each, zero skipped.
+Their final coverage index (`.artifacts/it/native-execution-ledger.json`) maps
+all 47 final distributed cases to passed reports, reusing unchanged cases and
+replacing affected assertions with final targeted evidence.
+
+25.8 final attempt stopped at the first smoke: a new unrelated system.tables
+field parameterized_view_parameters is formatted as compact Array(Tuple(...))
+in system.columns and multiline text in DESCRIBE. An isolated fixed-image
+metadata probe proved identical 39 field names and all other types. Respect the
+approved extra-field contract: compare complete field-name sets; validate type
+and native declaration agreement for consumed fields only. Do not add a type SQL
+normalizer for unused fields. Unit tests prove both unused multiline tolerance
+and consumed declaration mismatch rejection. Preserve the failed report; rerun
+the failed 25.8 suite on the corrected metadata state. Old baselines require no
+repeat: they already satisfied the stronger all-field literal equality; all
+consumed field checks and native operations remain equivalent there.
+
+### Final results and review
+
+`.artifacts/it/native-execution-ledger.json` records each completed suite and
+preserves the failed 25.8 attempt. `.artifacts/it/native-local-read-results.json`
+indexes reports, final production fingerprint and package/resource evidence.
+The primary CLI had both a target-side -m cluster and the runner's final default
+-m integration; pytest selected the latter. All 47 distributed, three cluster
+and 85 protocol cases passed in one 135-case report. Do not run the standalone
+protocol suite again merely for a different wrapper: its cases are already
+fully covered. CI uses the explicit marker environment and continues to select
+the intended disjoint jobs.
+
+Final source changes after the old-baseline positive tests only stop comparing
+unused complex field type text and retain strict complete-name/consumed-type
+checks. Old nodes had already satisfied the stronger literal comparison; the
+native operations, required types and outcomes are unchanged there. New unit
+cases and final 25.8/25.12/26.8 suites cover this precise compatibility fix.
+
+Static self-review covered the cumulative diff, credential-safe exceptions,
+source and physical schema, native role enforcement, full policy inventory,
+discovery-table filtering, effective partial-result controls, fixed endpoints,
+atomic failed-plan state, task budgets, streaming cancellation, TLS and resource
+ownership. No remaining blocking finding. All assertions run against real
+ClickHouse/Ray; no permanent skip, grant parser or policy-expression parser was
+introduced. CI matrix covers fixed 23.3/24.8/26.8 baselines but has not run remotely.
+No commit, push, PR or Issue mutation was performed.
+
+## Review correction validation
+
+User approved fixing the three reviewed findings. Scope: effective aggregate/sort
+overflow safety, display-independent business type comparison using the existing
+declaration scanner, and native target security/visibility before engine catalog
+interpretation. Additions do not change the public API or parse versions, grants
+or policy SQL. Existing default read/write functions are unchanged.
+
+| Suite | Coverage / state | Reason and non-overlap | Result |
+| --- | --- | --- | --- |
+| Targeted units, then final unit/contract | Type token equivalence and strict differences, effective overflow modes, native visibility, ordering | Fast development diagnostics; no container cases | 105 targeted and 515 final non-Ray unit/contract cases passed; six unchanged local-Ray contracts retain prior evidence |
+| Primary final ClickHouse/Ray integration | 26.8.1.2041; all distributed and integration cases, including new review regressions | One final combined run covers protocol and cluster; no separate duplicate protocol run | 147 passed, zero skipped, 98.25s (59 distributed + three legacy cluster + 85 protocol) |
+| Affected compatibility cases | 23.3.22.3, 24.8.14.39, 25.8.14.17, 25.12.2.54 | New review regression file plus existing actual-missing-target test, once per version; retain unrelated previous full-suite evidence | Each passed all 13 cases, zero failures/errors/skips |
+
+New infrastructure assertions use SQL settings profiles assigned to the same
+default identity on either the entrance or selected target node. This avoids an
+identity mismatch producing a false-positive fallback. Partial-key behavior is
+exercised with separate input blocks. Named Tuple positives run on real Ray
+workers with full and narrow projections, while different fields/types must
+still fail. Metadata row policy and denied visibility are tested separately
+from real missing targets. Record final source/test/config fingerprints and logs
+under `.artifacts/it/review-fix-*`; failures permit only root-cause recovery.
+
+First final compatibility selection: ClickHouse 25.8.14.17 passed all 13 cases
+(12 new review regressions plus actual missing target), zero skipped, 6.56s.
+The profile tests actually observed partial aggregate keys from separate blocks,
+then verified complete logical-source fallback on entrance and target nodes.
+Both named Tuple projections ran on Ray workers; semantic type/name differences,
+target catalog row filtering, native denied visibility and true absence were
+distinguished. Reuse this passed suite; do not repeat it on unchanged code.
+
+All remaining selections passed on their first run. Source fingerprints, exact
+image IDs and full pytest/Compose reports are indexed by
+`.artifacts/it/review-fix-execution.json`. No successful unchanged infrastructure
+suite was repeated. The primary explicitly selects the integration marker and
+includes the complete protocol suite, so no separate wrapper run is needed.
+
+Static self-review confirms that type keys change only comparison: quoted
+literals, tuple identifiers, widths, precision, timezone and enum values remain
+significant. Existing declarations and data SQL are retained. All three column
+comparison sites use the same key. Required system field declarations remain
+strict. Effective overflow checks precede sorted business-column metadata;
+target context and native DESCRIBE precede engine lookup. An empty catalog with
+a successful native description now raises DiscoveryError, rather than claiming
+absence. Denied visibility and actual missing targets retain native semantic
+errors. The all-or-nothing plan cache and no-runtime-fallback boundary remain
+unchanged and pass the complete primary suite. No remaining review finding.
+
+Ruff, strict mypy, docs/compatibility/release checks, strict Sphinx and spelling
+passed. Wheel/sdist and byte-level module verification are recorded in the fix
+evidence index. No commit, push, PR or Issue mutation was performed.
+
+## Numeric comment correction
+
+Approved scope: distinguish native DESCRIBE comments from explicitly selected
+system.columns positions, preserve schema drift detection, and document planning
+overhead, static configuration and independent query snapshots in the public
+read docstring. PR #20 at 2cff914 passed its remote CI and Greptile review; those
+results do not substitute for verification of this subsequent parser correction.
+
+| Suite | Coverage / state | Reason and overlap | Result |
+| --- | --- | --- | --- |
+| Unit/contract and static checks | Final parser/source integration, resolver numeric comments, write positions and true drift | Full fast local suite; no database cases | 532 non-Ray cases passed; six unchanged local-Ray contracts retain prior evidence; Ruff, strict mypy, docs/compatibility/release checks, strict Sphinx and spelling passed |
+| New numeric-comment IT | ClickHouse 26.8.1.2041, 23.3.22.3 and 24.8.14.39; two cases per baseline | Single/multiple columns, duplicates, native descriptions, logical/local Ray reads, query reads and append writes; run only this new file once per baseline | All three baselines passed both cases on their first run, zero failures/errors/skips |
+
+The shared parser changed, so the new real-server cases exercise both DESCRIBE
+callers and the system.columns write caller. Use cached fixed images, the existing
+two-shard/two-replica/three-Ray-node runner, unique Compose projects and its cleanup
+trap. Save source fingerprints, XML and logs under .artifacts/it/numeric-comments-*.
+Retain the earlier unrelated protocol, security, type and lifecycle evidence;
+do not repeat successful unchanged infrastructure suites.
+
+Final execution index: .artifacts/it/numeric-comments-execution.json. Each baseline
+ran the identical source/test/config state. The single-column regression checks
+the actual DESCRIBE comment '2026', verifies position 1, and completes conversion;
+the multi-column case also checks comment '0' and output order. Confirmed append
+writes and query reads exercise the other callers of the shared parser. Unit
+coverage retains errors for real source-position changes and invalid explicit
+write positions. No resolver check was removed or changed into fallback.
+
+The public docstring links to the existing architecture section and states
+per-node planning overhead, static topology/security and no shared snapshot.
+The PR-body draft records the completed remote matrix at 2cff914 and separately
+identifies this correction's local evidence. Local validation completed before
+the correction's commit and PR publication; remote outcomes are tracked by PR checks.

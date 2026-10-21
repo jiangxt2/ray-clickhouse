@@ -1,0 +1,36 @@
+x-clickhouse: &clickhouse
+  image: ${RAY_CLICKHOUSE_IT_IMAGE:-docker.m.daocloud.io/clickhouse/clickhouse-server@sha256:9f8fa0d51f86611fda226c4085cdafdddce35312a60c934de2e4450d61fcb99a}
+  environment:
+    CLICKHOUSE_DB: ray_clickhouse_it
+    CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+  networks: [rayclickhouse]
+  mem_limit: 1g
+  volumes:
+    - ../distributed/config.xml:/etc/clickhouse-server/config.d/distributed.xml:ro
+    - ../distributed/users.xml:/etc/clickhouse-server/users.d/distributed.xml:ro
+  healthcheck:
+    test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+    interval: 2s
+    timeout: 5s
+    retries: 60
+
+services:
+  clickhouse:
+    <<: *clickhouse
+    volumes:
+      - ../distributed/config.xml:/etc/clickhouse-server/config.d/distributed.xml:ro
+      - ../distributed/users.xml:/etc/clickhouse-server/users.d/distributed.xml:ro
+      - ../distributed/legacy-system-grants.xml:/etc/clickhouse-server/config.d/z-system-grants.xml:ro
+  ch2:
+    <<: *clickhouse
+  ch3:
+    <<: *clickhouse
+  ch4:
+    <<: *clickhouse
+  keeper:
+    image: ${RAY_CLICKHOUSE_IT_IMAGE:-docker.m.daocloud.io/clickhouse/clickhouse-server@sha256:9f8fa0d51f86611fda226c4085cdafdddce35312a60c934de2e4450d61fcb99a}
+    entrypoint: ["clickhouse", "keeper", "--config-file=/etc/keeper.xml"]
+    networks: [rayclickhouse]
+    mem_limit: 512m
+    volumes:
+      - ../distributed/keeper.xml:/etc/keeper.xml:ro

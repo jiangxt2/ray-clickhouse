@@ -1,0 +1,9 @@
+<clickhouse>
+  <users>
+    <xml_reader>
+      <password></password><networks><ip>::/0</ip></networks>
+      <profile>default</profile><quota>default</quota><access_management>1</access_management>
+      <databases><ray_clickhouse_it><xml_local><filter>id = 1</filter></xml_local></ray_clickhouse_it></databases>
+    </xml_reader>
+  </users>
+</clickhouse>

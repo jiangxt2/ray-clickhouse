@@ -67,6 +67,10 @@ class TargetTable:
 _TUPLE_FIELD = re.compile(
     r"^(?P<name>`(?:[^`]|``)+`|[A-Za-z_][A-Za-z0-9_]*)\s+(?P<type>.+)$"
 )
+_DECLARATION_TOKEN = re.compile(
+    r"'(?:[^'\\]|\\.|'')*'|`(?:[^`\\]|\\.|``)*`|"
+    r'"(?:[^"\\]|\\.|"")*"|[A-Za-z_][A-Za-z0-9_]*|\d+|[^\s]'
+)
 
 
 def split_type_arguments(value: str) -> tuple[str, ...]:
@@ -121,6 +125,17 @@ def parse_type(value: str) -> ClickHouseType:
     return ClickHouseType(
         text[:open_index].strip(), split_type_arguments(text[open_index + 1 : -1])
     )
+
+
+def type_declaration_key(value: str) -> tuple[str, ...]:
+    """Ignore display whitespace, preserving tokens and quoted type arguments.
+
+    Native DESCRIBE may pretty-print named tuples while system.columns uses
+    compact names. This key compares their spelling without interpreting SQL,
+    changing a declaration, or equating different ClickHouse types.
+    """
+    split_type_arguments(value)
+    return tuple(_DECLARATION_TOKEN.findall(value))
 
 
 def _transport_type_expression(value: str) -> str:
@@ -198,19 +213,24 @@ def render_read_projection(columns: Sequence[TargetColumn]) -> str:
     return ", ".join(projection)
 
 
-def parse_describe_rows(rows: Sequence[Sequence[Any]]) -> tuple[TargetColumn, ...]:
+def parse_describe_rows(
+    rows: Sequence[Sequence[Any]], *, position_index: int | None = None
+) -> tuple[TargetColumn, ...]:
+    """Use DESCRIBE row order unless the caller explicitly supplies positions."""
     columns: list[TargetColumn] = []
     for row in rows:
         if len(row) < 2 or not isinstance(row[0], str) or not isinstance(row[1], str):
             raise SchemaError("ClickHouse DESCRIBE returned malformed metadata")
         position = len(columns) + 1
-        if len(row) > 4 and row[4] not in (None, ""):
-            try:
-                position = int(row[4])
-            except (TypeError, ValueError):
-                # DESCRIBE TABLE returns comment in this position on some versions;
-                # system.columns returns the numeric position.
-                pass
+        if position_index is not None:
+            if (
+                len(row) <= position_index
+                or not isinstance(row[position_index], int)
+                or isinstance(row[position_index], bool)
+                or row[position_index] < 1
+            ):
+                raise SchemaError("ClickHouse column metadata has an invalid position")
+            position = row[position_index]
         columns.append(
             TargetColumn(
                 name=row[0],

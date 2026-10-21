@@ -1,0 +1,26 @@
+x-tls: &tls
+  volumes:
+    - ${RAY_CLICKHOUSE_IT_TLS_DIR:?TLS directory required}:/etc/clickhouse-it-tls:ro
+    - ../distributed/tls.xml:/etc/clickhouse-server/config.d/tls.xml:ro
+
+services:
+  clickhouse:
+    <<: *tls
+  ch2:
+    <<: *tls
+  ch3:
+    <<: *tls
+  ch4:
+    <<: *tls
+  ray-head:
+    volumes:
+      - ${RAY_CLICKHOUSE_IT_TLS_DIR}:/etc/clickhouse-it-tls:ro
+  ray-worker-1:
+    volumes:
+      - ${RAY_CLICKHOUSE_IT_TLS_DIR}:/etc/clickhouse-it-tls:ro
+  ray-worker-2:
+    volumes:
+      - ${RAY_CLICKHOUSE_IT_TLS_DIR}:/etc/clickhouse-it-tls:ro
+  runner:
+    volumes:
+      - ${RAY_CLICKHOUSE_IT_TLS_DIR}:/etc/clickhouse-it-tls:ro

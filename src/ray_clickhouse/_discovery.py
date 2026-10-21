@@ -122,9 +122,9 @@ def select_auto_range_column(
 @dataclass(frozen=True)
 class PartitionInfo:
     partition_id: str
-    rows: int
-    marks: int
-    bytes_on_disk: int
+    rows: int | None
+    marks: int | None
+    bytes_on_disk: int | None
 
 
 @dataclass(frozen=True)
@@ -537,7 +537,7 @@ def discover_target(
             settings=settings,
             transport_settings=transport_settings,
         )
-        columns = parse_describe_rows(result.result_rows)
+        columns = parse_describe_rows(result.result_rows, position_index=4)
         return TargetTable(table.database, table.table, engine, columns)
     except RayClickHouseError:
         raise
