@@ -628,6 +628,41 @@ def test_source_position_disagreement_remains_a_schema_error():
         resolve_with_readers(source, target)
 
 
+def test_projected_local_probe_keeps_complete_declarations_and_schema_checks():
+    columns = COLUMNS[:1] + (
+        TargetColumn("state", "AggregateFunction(sum,UInt64)", "", "", 2),
+    )
+    source, target = resolved_readers()
+    source.columns.return_value = target.columns.return_value = columns
+    target.schema.return_value = plan = SchemaPlan(SCHEMA, columns)
+    resolved = resolve_with_readers(source, target, schema=plan)
+    assert len(resolved.targets) == 2
+    assert all(t.schema.columns == columns for t in resolved.targets)
+    target.schema.assert_called_with(
+        QualifiedTable("db", "data"), columns, column_names=("id",)
+    )
+    target.columns.return_value = (
+        columns[0],
+        replace(columns[1], declared_type="AggregateFunction(max,UInt64)"),
+    )
+    with pytest.raises(SchemaError, match="declarations disagree"):
+        resolve_with_readers(source, target, schema=plan)
+
+
+def test_local_schema_probe_converts_only_selected_arrow_columns():
+    metadata = reader()
+    columns = COLUMNS[:1] + (
+        TargetColumn("state", "AggregateFunction(sum,UInt64)", "", "", 2),
+    )
+    metadata.client.query_arrow.return_value = pa.Table.from_batches([], schema=SCHEMA)
+    result = metadata.schema(QualifiedTable("db", "t"), columns, column_names=("id",))
+    assert result.columns == columns and result.arrow_schema == SCHEMA
+    assert (
+        metadata.client.query_arrow.call_args.args[0]
+        == "SELECT `id` FROM `db`.`t` LIMIT 0"
+    )
+
+
 def test_resolver_selects_one_replica_and_preserves_http_tls_and_secrets():
     source, target = resolved_readers()
     connection = replace(

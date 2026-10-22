@@ -94,16 +94,23 @@ class _ContractSource(Datasource):
         ]
 
 
-@pytest.fixture
-def native_dataset():
+@pytest.fixture(params=[None, ("value", "id")])
+def native_dataset(request):
     columns = tuple(
         TargetColumn(name, "Nullable(Int64)", "", "", i + 1)
         for i, name in enumerate(("id", "value"))
     )
-    plan = SchemaPlan(pa.schema([("id", pa.int64()), ("value", pa.int64())]), columns)
+    arrow = pa.schema([("id", pa.int64()), ("value", pa.int64())])
+    selected = request.param
+    if selected is not None:
+        arrow = pa.schema([arrow.field(name) for name in selected])
+        columns += (TargetColumn("state", "AggregateFunction(sum,UInt64)", "", "", 3),)
+    plan = SchemaPlan(arrow, columns)
     source = ClickHouseDatasource(
         ClickHouseReadConfig(
-            ClickHouseConnection("unused", "db"), QualifiedTable("db", "events")
+            ClickHouseConnection("unused", "db"),
+            QualifiedTable("db", "events"),
+            columns=selected,
         )
     )
     observed = []
@@ -172,7 +179,9 @@ def test_native_projection_and_predicate_composition(native_dataset, columns):
     base, _ = native_dataset
     reference = (
         ray.data.from_arrow(
-            pa.table({"id": list(range(20)), "value": [None, 1, 2, 3] * 5})
+            pa.table({"id": list(range(20)), "value": [None, 1, 2, 3] * 5}).select(
+                base.schema().names
+            )
         )
         .filter(expr=col("id") >= 12)
         .select_columns(columns)

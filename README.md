@@ -170,15 +170,19 @@ for metadata priorities and fallback boundaries.
 On Ray 2.58.0 and 2.59.0, table reads automatically push eligible
 `dataset.select_columns([...])` operations into the ClickHouse data-query SELECT
 list through the V1 Datasource contract. Explicit `columns=` still defines the
-initial visible columns. Repeated selections preserve their requested order and
+initial visible columns. Explicit selections also limit schema discovery's Arrow
+probe to those columns, allowing supported fields to be read from a table with
+unrelated unsupported types. Requested unsupported columns still fail explicitly.
+Repeated selections preserve their requested order and
 do not change sibling Dataset branches. Other supported Ray versions retain
 Ray-side selection; the dependency window is unchanged.
 
 Filters, order keys and physical split metadata remain available even when those
 columns are absent from the output. Empty selections preserve Ray's native row
 counts using one permitted source column as a physical row carrier. Initial
-schema discovery still validates the table before downstream selection; selecting
-fewer columns later cannot rescue a discovery failure. Query-mode selections
+schema discovery still precedes downstream selection. Without explicit `columns`,
+it validates the full table, so selecting fewer columns later cannot rescue a
+discovery failure. Query-mode selections
 remain in Ray and do not rewrite the supplied query.
 
 ## Query result reads

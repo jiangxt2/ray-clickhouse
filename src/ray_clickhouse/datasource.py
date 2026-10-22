@@ -171,7 +171,9 @@ class ClickHouseDatasource(Datasource):
             else self._predicate_schema
         )
         if schema is None:
-            schema = discover_schema(config.connection, config.table, config.limits)
+            schema = discover_schema(
+                config.connection, config.table, config.limits, columns=config.columns
+            )
         selected = self._projection_columns
         if selected is None:
             selected = config.columns or tuple(schema.arrow_schema.names)
@@ -247,7 +249,7 @@ class ClickHouseDatasource(Datasource):
             return self._planning_snapshot
         config = self._config
         schema = self._predicate_schema or discover_schema(
-            config.connection, config.table, config.limits
+            config.connection, config.table, config.limits, columns=config.columns
         )
         engine = discover_engine(config.connection, config.table, config.limits)
         filter_sql, _, _ = effective_filter(
@@ -303,7 +305,7 @@ class ClickHouseDatasource(Datasource):
                 if config.discovery_policy == "error":
                     raise
         if config.split == "range":
-            if config.range_column not in schema.arrow_schema.names:
+            if config.range_column not in {column.name for column in schema.columns}:
                 raise ConfigurationError(
                     "range_column is not present in the table schema"
                 )
@@ -429,7 +431,9 @@ class ClickHouseDatasource(Datasource):
             raise ConfigurationError(f"unknown ClickHouse columns: {sorted(unknown)}")
         if self._config.order_by:
             order_columns = {column for column, _ in self._config.order_by}
-            unknown_order = order_columns.difference(snapshot.schema.arrow_schema.names)
+            unknown_order = order_columns.difference(
+                column.name for column in snapshot.schema.columns
+            )
             if unknown_order:
                 raise ConfigurationError(
                     f"unknown order_by columns: {sorted(unknown_order)}"
