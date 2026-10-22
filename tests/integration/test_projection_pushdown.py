@@ -8,8 +8,9 @@ from decimal import Decimal
 import pyarrow as pa
 import pytest
 import ray
+from ray.data.expressions import col
 
-from ray_clickhouse import read_clickhouse
+from ray_clickhouse import ConfigurationError, SchemaError, read_clickhouse
 from ray_clickhouse._compat import supports_v1_projection_pushdown
 
 from .conftest import DATABASE
@@ -178,3 +179,125 @@ def test_projection_keeps_order_key_and_ray_filter_dependency(
         sql.rsplit("\n FORMAT ", 1)[0].rstrip().endswith("ORDER BY `id` DESC")
         for sql in queries
     ), queries
+
+
+def _create_mixed_schema(client, table, count=12):
+    rows = _create(client, table, count)
+    client.command(
+        f"ALTER TABLE `{DATABASE}`.`{table}` "
+        "ADD COLUMN state AggregateFunction(sum, UInt64) "
+        "DEFAULT initializeAggregation('sumState', toUInt64(id)), "
+        "ADD COLUMN variant Variant(Int64, String) "
+        "DEFAULT CAST(id AS Variant(Int64, String))"
+    )
+    return rows
+
+
+@pytest.mark.parametrize("split", ["single", "partition", "range", "auto"])
+@pytest.mark.parametrize("count", [0, 12])
+def test_explicit_columns_skip_unsupported_types_and_keep_native_composition(
+    clickhouse_client, connection_options, table_name, split, count
+):
+    rows = _create_mixed_schema(clickhouse_client, table_name, count)
+    root = _source(
+        connection_options, table_name, split, columns=("value", "day", "amount")
+    )
+    source_schema = root.schema().base_schema
+    assert source_schema.names == ["value", "day", "amount"]
+    assert source_schema.field("value").nullable
+    assert source_schema.field("amount").type == pa.decimal128(12, 2)
+    branch = root.select_columns(["amount", "value"]).filter(
+        expr=col("value").is_not_null()
+    )
+    expected = [
+        {"amount": r[3], "value": r[1]}
+        for r in rows
+        if 2 <= r[0] < 10 and r[1] is not None
+    ]
+    assert sorted(branch.take_all(), key=repr) == sorted(expected, key=repr)
+    original = root.materialize()
+    expected_rows = [
+        {"value": r[1], "day": r[2], "amount": r[3]} for r in rows if 2 <= r[0] < 10
+    ]
+    assert sorted(original.take_all(), key=repr) == sorted(expected_rows, key=repr)
+    assert original.count() == len(expected_rows)
+    empty = root.select_columns([]).materialize()
+    native_empty = (
+        ray.data.from_arrow(pa.Table.from_pylist(expected_rows, schema=source_schema))
+        .select_columns([])
+        .materialize()
+    )
+    assert empty.count() == native_empty.count() == len(expected_rows)
+    assert empty.take_all() == native_empty.take_all()
+    clickhouse_client.command("SYSTEM FLUSH LOGS")
+    probes = clickhouse_client.query(
+        "SELECT query FROM system.query_log WHERE type = 'QueryFinish' "
+        "AND startsWith(log_comment, 'ray-clickhouse operation=schema-probe') "
+        "AND position(query, %(table)s) > 0",
+        parameters={"table": table_name},
+    ).result_rows
+    assert probes
+    for (sql,) in probes:
+        projection = sql.split(" FROM ", 1)[0]
+        assert "`state`" not in projection and "`variant`" not in projection
+        assert "`id`" not in projection
+
+
+@pytest.mark.parametrize(
+    "columns,error",
+    [
+        (None, SchemaError),
+        (("state",), SchemaError),
+        (("variant",), SchemaError),
+        (("missing",), ConfigurationError),
+    ],
+)
+def test_explicit_schema_selection_keeps_unsupported_and_unknown_errors(
+    clickhouse_client, connection_options, table_name, columns, error
+):
+    _create_mixed_schema(clickhouse_client, table_name)
+    with pytest.raises(error):
+        read_clickhouse(
+            **connection_options,
+            table=table_name,
+            columns=columns,
+            override_num_blocks=1,
+        ).take_all()
+
+
+def test_unconverted_filter_and_order_dependencies_need_no_arrow_field(
+    clickhouse_client, connection_options, table_name
+):
+    rows = _create_mixed_schema(clickhouse_client, table_name)
+    actual = read_clickhouse(
+        **connection_options,
+        table=table_name,
+        columns=("day",),
+        filter="finalizeAggregation(state) >= 2",
+        order_by=(("id",), True),
+        override_num_blocks=1,
+    ).take_all()
+    assert actual == [{"day": r[2]} for r in reversed(rows) if r[0] >= 2]
+
+
+def test_view_explicit_columns_keep_schema_selection_and_single_query_contract(
+    clickhouse_client, connection_options, table_name
+):
+    rows = _create_mixed_schema(clickhouse_client, table_name)
+    view = table_name + "_view"
+    clickhouse_client.command(
+        f"CREATE VIEW `{DATABASE}`.`{view}` AS "
+        f"SELECT * FROM `{DATABASE}`.`{table_name}`"
+    )
+    try:
+        dataset = read_clickhouse(
+            **connection_options,
+            table=view,
+            columns=("day", "id"),
+            override_num_blocks=1,
+        )
+        assert sorted(dataset.take_all(), key=lambda r: r["id"]) == [
+            {"day": r[2], "id": r[0]} for r in rows
+        ]
+    finally:
+        clickhouse_client.command(f"DROP VIEW IF EXISTS `{DATABASE}`.`{view}`")

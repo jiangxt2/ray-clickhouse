@@ -235,6 +235,32 @@ def test_columns_context_and_binding_rejection_do_not_mutate_source():
         assert source._planning_snapshot is None and source._pushed_predicate is None
 
 
+def test_predicate_discovery_uses_explicit_columns_and_reuses_partial_schema():
+    full = schema()
+    plan = SchemaPlan(pa.schema([full.arrow_schema.field("id")]), full.columns)
+    source = make_source(columns=("id",))
+    with (
+        patch(
+            "ray_clickhouse.datasource.discover_schema", return_value=plan
+        ) as discovery,
+        patch(
+            "ray_clickhouse.datasource.discover_predicate_context", return_value=True
+        ),
+        patch("ray_clickhouse.datasource.discover_engine", return_value="MergeTree"),
+    ):
+        clone = source.apply_predicate(col("id") > 3)
+        assert clone is not source
+        assert clone.arrow_schema.names == ["id"]
+        discovery.assert_called_once_with(
+            source.config.connection,
+            source.config.table,
+            source.config.limits,
+            columns=("id",),
+        )
+        assert clone._planning_snapshot.schema.columns == full.columns
+        assert source._planning_snapshot is None and source._predicate_schema is None
+
+
 def test_predicate_clones_preserve_projection_and_full_source_facts():
     source = make_source()
     full = schema()

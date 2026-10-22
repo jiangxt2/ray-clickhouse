@@ -14,7 +14,10 @@ ordered identity projection, bounded by the explicit source `columns` and earlie
 selections. Renaming and expression evaluation remain Ray operations.
 
 Clones reuse full discovery facts, including range keys, partitions, topology and
-column declarations. Projected output fields are rebuilt from those declarations;
+column declarations. Table schema discovery retains all raw declarations but
+renders and validates Arrow fields only for explicit source `columns`, in the
+requested order. Full-table reads retain full-schema validation. Projected output
+fields are rebuilt from the validated source fields and their declarations;
 cached local shard sources are cloned independently. The data-query projection
 and ReadTask schema agree on order, type and nullability. Original source facts
 are never narrowed to the output schema.
@@ -27,9 +30,16 @@ copies its private column name. No COUNT query or alternate empty-row semantics
 are introduced. The generator closes its underlying stream on early termination
 and failure, as well as normal completion.
 
-Schema discovery still precedes Dataset optimization. This optimization does not
-avoid unsupported source-schema errors, rewrite query-mode SQL, or provide a
-database snapshot across requests.
+Schema discovery still precedes Dataset optimization. Explicit `columns` can omit
+unrelated unsupported declarations from the Arrow probe. A requested unsupported
+type or unknown column still fails; downstream Dataset selection cannot rescue a
+full-schema discovery failure when `columns` was omitted. Database-only filter,
+order and split dependencies retain their full declarations without becoming
+output Arrow fields. Native predicate compilation continues using validated Arrow
+fields within the source's visible columns. Local shard probes use the same Arrow
+subset, while complete logical/physical declarations and security metadata remain
+subject to the existing consistency checks. This does not rewrite query-mode SQL
+or provide a database snapshot across requests.
 
 ## Read path
 

@@ -9,7 +9,7 @@ from typing import Any
 
 import pyarrow as pa
 
-from ray_clickhouse._errors import SchemaError, WriteError
+from ray_clickhouse._errors import ConfigurationError, SchemaError, WriteError
 from ray_clickhouse._models import QualifiedTable
 from ray_clickhouse._sql import normalize_columns
 
@@ -42,6 +42,8 @@ class TargetColumn:
 
 @dataclass(frozen=True)
 class SchemaPlan:
+    """Validated Arrow fields and source declarations, including non-output columns."""
+
     arrow_schema: pa.Schema
     columns: tuple[TargetColumn, ...]
 
@@ -247,9 +249,27 @@ def parse_describe_rows(
     return tuple(sorted(columns, key=lambda column: column.position))
 
 
+def select_read_columns(
+    columns: tuple[TargetColumn, ...], names: tuple[str, ...] | None
+) -> tuple[TargetColumn, ...]:
+    """Select Arrow-required declarations without narrowing the source metadata."""
+    selected = normalize_columns(names)
+    if selected is None:
+        return columns
+    by_name = {column.name: column for column in columns}
+    unknown = set(selected).difference(by_name)
+    if unknown:
+        raise ConfigurationError(f"unknown ClickHouse columns: {sorted(unknown)}")
+    return tuple(by_name[name] for name in selected)
+
+
 def canonical_schema(
-    columns: tuple[TargetColumn, ...], arrow_schema: pa.Schema
+    columns: tuple[TargetColumn, ...],
+    arrow_schema: pa.Schema,
+    *,
+    source_columns: tuple[TargetColumn, ...] | None = None,
 ) -> SchemaPlan:
+    """Validate the probed fields, retaining full declarations for table planning."""
     names = tuple(column.name for column in columns)
     if tuple(arrow_schema.names) != names:
         raise SchemaError("ClickHouse DESCRIBE and Arrow schemas disagree")
@@ -257,7 +277,9 @@ def canonical_schema(
         arrow_schema.serialize()
     except Exception:
         raise SchemaError("ClickHouse schema cannot be represented in Arrow") from None
-    return SchemaPlan(arrow_schema, columns)
+    return SchemaPlan(
+        arrow_schema, columns if source_columns is None else source_columns
+    )
 
 
 def _unwrap(parsed: ClickHouseType) -> tuple[ClickHouseType, bool]:

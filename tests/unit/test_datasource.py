@@ -312,6 +312,59 @@ def test_selected_columns_preserve_requested_order():
     assert query.sql.startswith("SELECT `value`, `id` FROM")
 
 
+@pytest.mark.parametrize("split", ["range", "auto"])
+def test_explicit_projection_keeps_non_output_split_key(split):
+    full = _schema_plan()
+    plan = SchemaPlan(pa.schema([full.arrow_schema.field("value")]), full.columns)
+    config = _config(
+        columns=("value",),
+        split=split,
+        **({"range_column": "id"} if split == "range" else {}),
+    )
+    source = ClickHouseDatasource(config)
+    with (
+        patch(
+            "ray_clickhouse.datasource.discover_schema", return_value=plan
+        ) as discovery,
+        patch("ray_clickhouse.datasource.discover_engine", return_value="MergeTree"),
+        patch("ray_clickhouse.datasource.discover_sorting_key", return_value="id"),
+        patch(
+            "ray_clickhouse.datasource.discover_range_facts",
+            return_value=RangeFacts("id", "UInt64", 10, 0, 0, 9),
+        ),
+        patch("ray_clickhouse.datasource.make_read_task") as make_task,
+    ):
+        source.get_read_tasks(3)
+        discovery.assert_called_once_with(
+            config.connection, config.table, config.limits, columns=("value",)
+        )
+        assert source.arrow_schema.names == ["value"]
+        assert all(
+            "`id` >=" in _query_from_read_fn(c.args[0]).sql
+            for c in make_task.call_args_list
+        )
+
+
+def test_explicit_projection_keeps_non_output_order_key():
+    full = _schema_plan()
+    plan = SchemaPlan(pa.schema([full.arrow_schema.field("value")]), full.columns)
+    with (
+        patch("ray_clickhouse.datasource.discover_schema", return_value=plan),
+        patch("ray_clickhouse.datasource.discover_engine", return_value="MergeTree"),
+        patch("ray_clickhouse.datasource.make_read_task") as make_task,
+    ):
+        source = ClickHouseDatasource(
+            _config(columns=("value",), order_by=(("id", True),))
+        )
+        source.get_read_tasks(1)
+        sql = _query_from_read_fn(make_task.call_args.args[0]).sql
+        assert sql == "SELECT `value` FROM `analytics`.`events` ORDER BY `id` DESC"
+        with pytest.raises(ConfigurationError, match="unknown order_by"):
+            ClickHouseDatasource(
+                _config(columns=("value",), order_by=(("missing", False),))
+            ).get_read_tasks(1)
+
+
 def test_permission_failure_does_not_fallback_to_single():
     with (
         patch("ray_clickhouse.datasource.ensure_supported_ray_version"),

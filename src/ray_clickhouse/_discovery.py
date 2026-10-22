@@ -38,6 +38,7 @@ from ray_clickhouse._schema import (
     parse_describe_rows,
     parse_type,
     render_read_projection,
+    select_read_columns,
 )
 from ray_clickhouse._sql import build_select, validate_filter
 from ray_clickhouse._transport import _new_query_id
@@ -422,7 +423,11 @@ def discover_query_schema(
 
 
 def discover_schema(
-    connection: ClickHouseConnection, table: QualifiedTable, limits: ResourceLimits
+    connection: ClickHouseConnection,
+    table: QualifiedTable,
+    limits: ResourceLimits,
+    *,
+    columns: tuple[str, ...] | None = None,
 ) -> SchemaPlan:
     client = None
     try:
@@ -435,8 +440,9 @@ def discover_schema(
             settings=settings,
             transport_settings=transport_settings,
         )
-        columns = parse_describe_rows(describe.result_rows)
-        projection = render_read_projection(columns)
+        source_columns = parse_describe_rows(describe.result_rows)
+        selected = select_read_columns(source_columns, columns)
+        projection = render_read_projection(selected)
         settings, transport_settings = _query_context(
             connection, limits, "schema-probe"
         )
@@ -448,7 +454,9 @@ def discover_schema(
         )
         if not isinstance(arrow_table, pa.Table):
             raise SchemaError("ClickHouse returned a non-Arrow schema probe")
-        return canonical_schema(columns, arrow_table.schema)
+        return canonical_schema(
+            selected, arrow_table.schema, source_columns=source_columns
+        )
     except RayClickHouseError:
         raise
     except BaseException as exc:

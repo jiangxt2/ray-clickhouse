@@ -52,6 +52,79 @@ def multiset(rows):
     return Counter(tuple(sorted(row.items())) for row in rows)
 
 
+def _add_unconverted_column(tables):
+    declaration = (
+        "state AggregateFunction(sum, UInt64) "
+        "DEFAULT initializeAggregation('sumState', toUInt64(id))"
+    )
+    for client in tables.clients:
+        client.command(
+            f"ALTER TABLE {DATABASE}.{tables.local} "
+            f"ADD COLUMN IF NOT EXISTS {declaration}"
+        )
+    for client in tables.clients:
+        client.command(f"SYSTEM SYNC REPLICA {DATABASE}.{tables.local}")
+    tables.clients[0].command(
+        f"ALTER TABLE {DATABASE}.{tables.distributed} ADD COLUMN {declaration}"
+    )
+
+
+@pytest.mark.parametrize(
+    "split,local",
+    [
+        ("single", False),
+        ("single", True),
+        ("partition", True),
+        ("range", True),
+        ("auto", True),
+    ],
+)
+def test_explicit_schema_subset_reads_logical_and_local_shards(
+    cluster_tables, split, local
+):
+    from ray.data.expressions import col
+
+    _add_unconverted_column(cluster_tables)
+    datasource = source(
+        cluster_tables,
+        columns=("txt", "id"),
+        split=split,
+        convert_distributed_to_local=local,
+        **({"range_column": "value"} if split == "range" else {}),
+    )
+    dataset = ray.data.read_datasource(datasource, override_num_blocks=3, concurrency=2)
+    expected = [
+        {"txt": r["txt"], "id": r["id"]}
+        for r in cluster_tables.rows
+        if r["value"] is None or r["value"] >= 9
+    ]
+    selected = dataset.filter(expr=col("id") >= 0).select_columns(["txt"])
+    assert multiset(selected.take_all()) == multiset(
+        [{"txt": r["txt"]} for r in expected]
+    )
+    assert multiset(dataset.take_all()) == multiset(expected)
+    assert dataset.select_columns([]).materialize().count() == len(expected)
+    datasource.get_read_tasks(3)
+    assert bool(datasource._local_sources) is local
+    if local:
+        for child in datasource._local_sources:
+            assert child.arrow_schema.names == ["txt", "id"]
+            assert "state" in {c.name for c in child._planning_snapshot.schema.columns}
+
+
+def test_unselected_target_declaration_drift_still_fails(cluster_tables):
+    _add_unconverted_column(cluster_tables)
+    cluster_tables.clients[2].command(
+        f"ALTER TABLE {DATABASE}.{cluster_tables.local} "
+        "MODIFY COLUMN state AggregateFunction(sum, UInt64) "
+        "DEFAULT initializeAggregation('sumState', toUInt64(id) + 1)"
+    )
+    for client in cluster_tables.clients[2:]:
+        client.command(f"SYSTEM SYNC REPLICA {DATABASE}.{cluster_tables.local}")
+    with pytest.raises(SchemaError, match="declarations disagree"):
+        source(cluster_tables, columns=("id",)).get_read_tasks(3)
+
+
 @pytest.mark.parametrize("split", ["single", "partition", "range", "auto"])
 @pytest.mark.parametrize("budget", [1, 4])
 def test_all_shards_duplicates_nulls_and_global_budget(cluster_tables, split, budget):

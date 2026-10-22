@@ -3,8 +3,13 @@ from unittest.mock import Mock, patch
 import pyarrow as pa
 import pytest
 
-from ray_clickhouse._discovery import discover_target
-from ray_clickhouse._errors import SchemaError, WriteError
+from ray_clickhouse._discovery import discover_schema, discover_target
+from ray_clickhouse._errors import (
+    ConfigurationError,
+    PermissionError,
+    SchemaError,
+    WriteError,
+)
 from ray_clickhouse._models import ClickHouseConnection, QualifiedTable, ResourceLimits
 from ray_clickhouse._schema import (
     TargetColumn,
@@ -13,6 +18,7 @@ from ray_clickhouse._schema import (
     canonical_schema,
     parse_describe_rows,
     render_read_projection,
+    select_read_columns,
     type_declaration_key,
     validate_source_schema,
 )
@@ -30,6 +36,97 @@ def test_parse_describe_and_canonical_schema() -> None:
         pa.schema([pa.field("id", pa.uint64()), pa.field("value", pa.string())]),
     )
     assert plan.arrow_schema.names == ["id", "value"]
+
+
+@pytest.mark.parametrize(
+    "unsupported", ["AggregateFunction(sum, UInt64)", "Variant(Int64, String)"]
+)
+def test_explicit_schema_probe_retains_unconverted_source_metadata(unsupported):
+    rows = [
+        ("id", "Int64", "", ""),
+        ("value", "Nullable(String)", "", ""),
+        ("state", unsupported, "", ""),
+    ]
+    arrow = pa.schema(
+        [pa.field("value", pa.string()), pa.field("id", pa.int64(), False)]
+    )
+    client = Mock()
+    client.query.return_value.result_rows = rows
+    client.query_arrow.return_value = pa.Table.from_batches([], schema=arrow)
+    with patch("ray_clickhouse._discovery._open", return_value=client):
+        plan = discover_schema(
+            ClickHouseConnection("entry", "db"),
+            QualifiedTable("db", "data"),
+            ResourceLimits(),
+            columns=("value", "id"),
+        )
+    assert plan.arrow_schema == arrow
+    assert plan.columns == parse_describe_rows(rows)
+    assert client.query_arrow.call_args.args[0] == (
+        "SELECT `value`, `id` FROM `db`.`data` LIMIT 0"
+    )
+    client.close.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "names,error",
+    [
+        (None, SchemaError),
+        (("state",), SchemaError),
+        (("missing",), ConfigurationError),
+        ((), ConfigurationError),
+    ],
+)
+def test_schema_selection_errors_precede_arrow_probe_and_close_client(names, error):
+    client = Mock()
+    client.query.return_value.result_rows = [
+        ("id", "Int64", "", ""),
+        ("state", "AggregateFunction(sum, UInt64)", "", ""),
+    ]
+    with patch("ray_clickhouse._discovery._open", return_value=client):
+        with pytest.raises(error):
+            discover_schema(
+                ClickHouseConnection("entry", "db"),
+                QualifiedTable("db", "data"),
+                ResourceLimits(),
+                columns=names,
+            )
+    client.query_arrow.assert_not_called()
+    client.close.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "failure", [PermissionError("denied"), SchemaError("bad probe")]
+)
+def test_selected_probe_propagates_error_and_closes_client(failure):
+    client = Mock()
+    client.query.return_value.result_rows = [("id", "Int64", "", "")]
+    client.query_arrow.side_effect = failure
+    with patch("ray_clickhouse._discovery._open", return_value=client):
+        with pytest.raises(type(failure), match=str(failure)):
+            discover_schema(
+                ClickHouseConnection("entry", "db"),
+                QualifiedTable("db", "data"),
+                ResourceLimits(),
+                columns=("id",),
+            )
+    client.close.assert_called_once()
+
+
+def test_projected_canonical_schema_keeps_order_checks_and_full_declarations():
+    columns = parse_describe_rows(
+        [("id", "Int64", "", ""), ("value", "String", "", "")]
+    )
+    selected = select_read_columns(columns, ("value", "id"))
+    arrow = pa.schema([("value", pa.string()), ("id", pa.int64())])
+    plan = canonical_schema(selected, arrow, source_columns=columns)
+    assert plan.columns == columns and plan.arrow_schema == arrow
+    with pytest.raises(SchemaError, match="disagree"):
+        canonical_schema(
+            selected,
+            pa.schema([("id", pa.int64()), ("value", pa.string())]),
+            source_columns=columns,
+        )
 
 
 def test_parse_describe_accepts_comment_in_position_slot() -> None:

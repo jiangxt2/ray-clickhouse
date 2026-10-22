@@ -41,6 +41,7 @@ from ray_clickhouse._schema import (
     canonical_schema,
     parse_type,
     render_read_projection,
+    select_read_columns,
     type_declaration_key,
 )
 
@@ -639,14 +640,19 @@ class MetadataReader:
         return tuple(sorted(columns, key=lambda column: column.position))
 
     def schema(
-        self, table: QualifiedTable, columns: tuple[TargetColumn, ...]
+        self,
+        table: QualifiedTable,
+        columns: tuple[TargetColumn, ...],
+        *,
+        column_names: tuple[str, ...] | None = None,
     ) -> SchemaPlan:
+        selected = select_read_columns(columns, column_names)
         settings, transport = _query_context(
             self.connection, self.limits, "local-schema-probe"
         )
         try:
             probe = self.client.query_arrow(
-                f"SELECT {render_read_projection(columns)} FROM {table.sql()} LIMIT 0",
+                f"SELECT {render_read_projection(selected)} FROM {table.sql()} LIMIT 0",
                 settings=settings,
                 transport_settings=transport,
                 use_strings=True,
@@ -655,7 +661,7 @@ class MetadataReader:
             raise _translate(exc, operation="schema discovery") from None
         if not isinstance(probe, pa.Table):
             raise SchemaError("local schema probe returned a non-Arrow result")
-        return canonical_schema(columns, probe.schema)
+        return canonical_schema(selected, probe.schema, source_columns=columns)
 
     def context(self, table: QualifiedTable) -> tuple[tuple[str, str], ...]:
         self.require_fields("settings", {"name": "str", "value": "str"})
@@ -920,7 +926,9 @@ def resolve_distributed(
                     raise SchemaError(
                         "logical and physical column declarations disagree"
                     )
-                target_schema = target.schema(target_table, columns)
+                target_schema = target.schema(
+                    target_table, columns, column_names=tuple(schema.arrow_schema.names)
+                )
                 for name in schema.arrow_schema.names:
                     if target_schema.arrow_schema.field(
                         name
