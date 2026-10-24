@@ -7,7 +7,8 @@ import math
 import re
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 from urllib.parse import quote, quote_plus
 
@@ -21,6 +22,15 @@ from ray_clickhouse._errors import (
     ReadError,
     TransportError,
     WriteError,
+)
+from ray_clickhouse._logging import (
+    LogContext,
+    ProgressBudget,
+    current_context,
+    emit,
+    error_type,
+    runtime_fields,
+    stage,
 )
 from ray_clickhouse._models import ClickHouseConnection, QuerySpec, ResourceLimits
 
@@ -176,6 +186,36 @@ def _lookup_query_diagnostic(
     log_comment: str,
     *,
     flush_logs: bool,
+    log_context: LogContext | None = None,
+) -> dict[str, object] | None:
+    try:
+        result = _lookup_query_diagnostic_impl(
+            connection, limits, query_id, log_comment, flush_logs=flush_logs
+        )
+    except Exception:
+        # This also isolates failures in existing diagnostic debug handlers.
+        result = None
+    emit(
+        logger,
+        "clickhouse.diagnostic.finished",
+        log_context or current_context(),
+        phase="diagnostic",
+        status="succeeded" if result else "unavailable",
+        query_id=query_id,
+        available=result is not None,
+        reason_code="available" if result else "query_log_unavailable",
+        exception_code=result.get("exception_code") if result else None,
+    )
+    return result
+
+
+def _lookup_query_diagnostic_impl(
+    connection: ClickHouseConnection,
+    limits: ResourceLimits,
+    query_id: str,
+    log_comment: str,
+    *,
+    flush_logs: bool,
 ) -> dict[str, object] | None:
     """Best-effort lookup of a failed query in ClickHouse query_log.
 
@@ -303,6 +343,7 @@ def _annotate_read_error(
     cause: BaseException,
     operation: str,
     secrets: tuple[str, ...],
+    log_context: LogContext | None = None,
 ) -> RayClickHouseError:
     diagnostic = (
         _lookup_query_diagnostic(
@@ -311,6 +352,7 @@ def _annotate_read_error(
             query_id,
             log_comment,
             flush_logs=flush_logs,
+            log_context=log_context,
         )
         if query_started
         else None
@@ -330,21 +372,80 @@ def _annotate_read_error(
     return error
 
 
+@contextmanager
+def _observe_stream_cleanup(
+    stream_context: Any, on_failure: Callable[[BaseException], None]
+) -> Iterator[Any]:
+    """Observe exit failures without changing the context's suppression or cleanup."""
+    entered = False
+    body_failure: BaseException | None = None
+    try:
+        with stream_context as stream:
+            entered = True
+            try:
+                yield stream
+            except BaseException as error:
+                body_failure = error
+                raise
+    except BaseException as error:
+        if entered and error is not body_failure:
+            on_failure(error)
+        raise
+
+
 def stream_query(
     connection: ClickHouseConnection,
     query: QuerySpec,
     limits: ResourceLimits,
     *,
     diagnostic_flush_logs: bool = False,
+    log_context: LogContext | None = None,
 ) -> Iterator[pa.Table]:
     """Read one query as bounded Arrow blocks and deterministically close the client."""
     client: Any | None = None
     failure: BaseException | None = None
     query_id = _new_query_id(query.operation)
+    context = (log_context or LogContext.create()).execution()
+    progress = ProgressBudget(context, logger)
+    started = time.monotonic()
+    runtime = runtime_fields(worker=True)
+    rows = blocks = arrow_bytes = 0
+    first_block = False
+    actual_fields: int | None = None
+    cleanup_failed = False
+    emit(
+        logger,
+        "clickhouse.read.started",
+        context,
+        phase="client_setup",
+        status="started",
+        role="worker",
+        query_id=query_id,
+        operation=query.operation,
+        **runtime,
+    )
     log_comment = f"ray-clickhouse operation={query.operation} query_id={query_id}"
     query_started = False
     operation = "read client initialization"
     secrets = _secret_strings((connection.password, query.parameter_dict(), query.sql))
+
+    def stream_cleanup_failed(error: BaseException) -> None:
+        nonlocal operation
+        operation = "Arrow stream cleanup"
+        emit(
+            logger,
+            "clickhouse.cleanup.failed",
+            context,
+            level=logging.WARNING,
+            phase="cleanup",
+            status="failed",
+            role="worker",
+            resource_kind="read_stream",
+            error_type=error_type(error),
+            query_id=query_id,
+            **runtime,
+        )
+
     try:
         try:
             import clickhouse_connect
@@ -366,11 +467,25 @@ def stream_query(
         settings["log_comment"] = log_comment
         query_started = True
         operation = "Arrow stream setup"
-        with client.query_arrow_stream(
-            query.sql,
-            parameters=query.parameter_dict(),
-            settings=settings,
-            use_strings=True,
+        emit(
+            logger,
+            "clickhouse.read.started",
+            context,
+            phase="stream_setup",
+            status="started",
+            role="worker",
+            query_id=query_id,
+            operation=query.operation,
+            **runtime,
+        )
+        with _observe_stream_cleanup(
+            client.query_arrow_stream(
+                query.sql,
+                parameters=query.parameter_dict(),
+                settings=settings,
+                use_strings=True,
+            ),
+            stream_cleanup_failed,
         ) as stream:
             operation = "Arrow stream iteration"
             for batch in stream:
@@ -379,6 +494,7 @@ def stream_query(
                     batch = pa.Table.from_batches([batch])
                 if not isinstance(batch, pa.Table):
                     raise ReadError("ClickHouse yielded a non-Arrow table")
+                actual_fields = len(batch.schema)
                 if query.strict_schema:
                     if not batch.schema.equals(
                         query.arrow_schema, check_metadata=False
@@ -392,12 +508,46 @@ def stream_query(
                             "query result contains NULL in a non-nullable field"
                         )
                 canonical = _validate_table(batch, query.arrow_schema)
-                yield from iter_batch_slices(
+                for block in iter_batch_slices(
                     canonical,
                     max_rows=limits.batch_rows,
                     max_bytes=limits.batch_bytes,
-                )
+                ):
+                    blocks += 1
+                    rows += block.num_rows
+                    arrow_bytes += block.nbytes
+                    if not first_block and block.num_rows > 0:
+                        first_block = True
+                        emit(
+                            logger,
+                            "clickhouse.read.first_block",
+                            context,
+                            phase="stream",
+                            status="emitted",
+                            role="worker",
+                            query_id=query_id,
+                            operation=query.operation,
+                            duration_ms=(time.monotonic() - started) * 1000,
+                            **runtime,
+                        )
+                    if progress.admit():
+                        emit(
+                            logger,
+                            "clickhouse.read.progress",
+                            context,
+                            phase="stream",
+                            status="emitted",
+                            role="worker",
+                            query_id=query_id,
+                            batch_index=blocks,
+                            emitted_blocks=blocks,
+                            emitted_rows=rows,
+                            arrow_bytes=arrow_bytes,
+                            **runtime,
+                        )
+                    yield block
                 operation = "Arrow stream iteration"
+            operation = "Arrow stream cleanup"
     except (KeyboardInterrupt, SystemExit, GeneratorExit) as exc:
         failure = exc
         raise
@@ -413,6 +563,7 @@ def stream_query(
             cause=exc.__context__ or exc,
             operation=operation,
             secrets=secrets,
+            log_context=context,
         )
         raise failure from None
     except BaseException as exc:
@@ -428,23 +579,80 @@ def stream_query(
             cause=exc,
             operation=operation,
             secrets=secrets,
+            log_context=context,
         )
         raise failure from None
     finally:
-        if client is not None:
-            try:
-                client.close()
-            except Exception as exc:
-                if failure is None:
-                    error = TransportError("failed to close ClickHouse read client")
-                    error.attach_diagnostic(
+        try:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception as exc:
+                    cleanup_failed = True
+                    emit(
+                        logger,
+                        "clickhouse.cleanup.failed",
+                        context,
+                        level=logging.WARNING,
+                        phase="cleanup",
+                        status="failed",
+                        role="worker",
+                        resource_kind="read_client",
+                        error_type=error_type(exc),
                         query_id=query_id,
-                        diagnostic=None,
-                        client_diagnostic=_client_read_diagnostic(
-                            exc, "read client close", secrets
-                        ),
+                        **runtime,
                     )
-                    raise error from None
+                    if failure is None:
+                        error = TransportError("failed to close ClickHouse read client")
+                        error.attach_diagnostic(
+                            query_id=query_id,
+                            diagnostic=None,
+                            client_diagnostic=_client_read_diagnostic(
+                                exc, "read client close", secrets
+                            ),
+                        )
+                        raise error from None
+        finally:
+            status = "succeeded"
+            if isinstance(failure, GeneratorExit):
+                status = "consumer_closed"
+            elif isinstance(failure, (KeyboardInterrupt, SystemExit)):
+                status = "cancelled"
+            elif failure is not None or cleanup_failed:
+                status = "failed"
+            phase = {
+                "read client initialization": "client_setup",
+                "Arrow stream setup": "stream_setup",
+                "Arrow conversion": "conversion",
+                "Arrow stream cleanup": "cleanup",
+            }.get(operation, "stream")
+            emit(
+                logger,
+                "clickhouse.read.finished",
+                context,
+                level=logging.ERROR if status == "failed" else logging.DEBUG,
+                phase="cleanup" if cleanup_failed and failure is None else phase,
+                status=status,
+                role="worker",
+                query_id=query_id,
+                operation=query.operation,
+                emitted_blocks=blocks,
+                emitted_rows=rows,
+                arrow_bytes=arrow_bytes,
+                suppressed_progress=progress.suppressed,
+                duration_ms=(time.monotonic() - started) * 1000,
+                error_type=error_type(failure) if failure else None,
+                mismatch_category="arrow_validation"
+                if status == "failed" and phase == "conversion"
+                else None,
+                expected_fields=len(query.arrow_schema)
+                if status == "failed" and phase == "conversion"
+                else None,
+                actual_fields=actual_fields
+                if status == "failed" and phase == "conversion"
+                else None,
+                **runtime,
+            )
 
 
 class ClickHouseInsertSession:
@@ -458,6 +666,7 @@ class ClickHouseInsertSession:
         database: str,
         table: str,
         insert_mode: str,
+        log_context: LogContext | None = None,
     ) -> None:
         self._connection = connection
         self._limits = limits
@@ -465,14 +674,24 @@ class ClickHouseInsertSession:
         self._table = table
         self._insert_mode = insert_mode
         self._client: Any | None = None
+        self._log_context = log_context or LogContext.create().execution()
+        self._first_insert = True
+        self._runtime = runtime_fields(worker=True)
 
     def start(self) -> None:
         try:
             import clickhouse_connect
 
-            self._client = clickhouse_connect.get_client(
-                **self._connection.client_kwargs(self._limits)
-            )
+            with stage(
+                logger,
+                self._log_context,
+                "clickhouse.write.prepare",
+                "client_setup",
+                role="worker",
+            ):
+                self._client = clickhouse_connect.get_client(
+                    **self._connection.client_kwargs(self._limits)
+                )
         except BaseException as exc:
             if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
                 raise
@@ -490,6 +709,21 @@ class ClickHouseInsertSession:
         )
         settings.setdefault("log_comment", "ray-clickhouse operation=insert")
         query_id = _new_query_id("insert")
+        first = self._first_insert
+        self._first_insert = False
+        started = time.monotonic() if first else 0.0
+        if first:
+            emit(
+                logger,
+                "clickhouse.insert.started",
+                self._log_context,
+                phase="insert",
+                status="started",
+                role="worker",
+                client_insert_id=query_id,
+                insert_mode=self._insert_mode,
+                **self._runtime,
+            )
         try:
             self._client.insert_arrow(
                 self._table,
@@ -502,11 +736,39 @@ class ClickHouseInsertSession:
             raise
         except BaseException as exc:
             translated = _translate(exc, operation="Arrow insert")
+            emit(
+                logger,
+                "clickhouse.insert.failed",
+                self._log_context,
+                level=logging.ERROR,
+                phase="insert",
+                role="worker",
+                status="ambiguous"
+                if isinstance(translated, TransportError)
+                else "failed",
+                client_insert_id=query_id,
+                insert_mode=self._insert_mode,
+                error_type=error_type(translated),
+                **self._runtime,
+            )
             if isinstance(translated, TransportError):
                 raise AmbiguousWriteError(
                     "ClickHouse insert outcome is unknown after a transport failure"
                 ) from None
             raise translated from None
+        if first:
+            emit(
+                logger,
+                "clickhouse.insert.finished",
+                self._log_context,
+                phase="insert",
+                status="confirmed",
+                role="worker",
+                client_insert_id=query_id,
+                insert_mode=self._insert_mode,
+                duration_ms=(time.monotonic() - started) * 1000,
+                **self._runtime,
+            )
         return {"status": "confirmed", "query_id": query_id}
 
     def close(self) -> None:
@@ -516,5 +778,17 @@ class ClickHouseInsertSession:
             return
         try:
             client.close()
-        except Exception:
+        except Exception as error:
+            emit(
+                logger,
+                "clickhouse.cleanup.failed",
+                self._log_context,
+                level=logging.WARNING,
+                phase="cleanup",
+                status="failed",
+                role="worker",
+                resource_kind="write_client",
+                error_type=error_type(error),
+                **self._runtime,
+            )
             raise TransportError("failed to close ClickHouse write client") from None

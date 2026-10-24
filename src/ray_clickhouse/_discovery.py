@@ -22,6 +22,7 @@ from ray_clickhouse._errors import (
     SchemaError,
     TransportError,
 )
+from ray_clickhouse._logging import discovery
 from ray_clickhouse._models import (
     ClickHouseConnection,
     QualifiedTable,
@@ -174,6 +175,7 @@ def _predicate_ast_is_neutral(result: Any) -> bool:
     return tuple(line.strip() for line in lines) == _NEUTRAL_PREDICATE_AST
 
 
+@discovery("predicate_context")
 def discover_predicate_context(
     connection: ClickHouseConnection, limits: ResourceLimits
 ) -> bool:
@@ -353,6 +355,7 @@ def _query_context(
     return settings, {"query_id": _new_query_id(operation)}
 
 
+@discovery("schema")
 def discover_query_schema(
     connection: ClickHouseConnection,
     query_sql: str,
@@ -422,6 +425,7 @@ def discover_query_schema(
                     ) from None
 
 
+@discovery("schema")
 def discover_schema(
     connection: ClickHouseConnection,
     table: QualifiedTable,
@@ -471,6 +475,7 @@ def discover_schema(
                 pass
 
 
+@discovery("engine")
 def discover_engine(
     connection: ClickHouseConnection, table: QualifiedTable, limits: ResourceLimits
 ) -> str:
@@ -506,6 +511,7 @@ def discover_engine(
                 pass
 
 
+@discovery("sorting_key")
 def discover_sorting_key(
     connection: ClickHouseConnection, table: QualifiedTable, limits: ResourceLimits
 ) -> str:
@@ -546,6 +552,7 @@ def discover_sorting_key(
                 pass
 
 
+@discovery("partition")
 def discover_partitions(
     connection: ClickHouseConnection, table: QualifiedTable, limits: ResourceLimits
 ) -> tuple[PartitionInfo, ...]:
@@ -609,6 +616,7 @@ def discover_partitions(
                 pass
 
 
+@discovery("range")
 def discover_range_facts(
     connection: ClickHouseConnection,
     table: QualifiedTable,
@@ -678,6 +686,7 @@ def discover_range_facts(
                 pass
 
 
+@discovery("target")
 def discover_target(
     connection: ClickHouseConnection, table: QualifiedTable, limits: ResourceLimits
 ) -> TargetTable:
