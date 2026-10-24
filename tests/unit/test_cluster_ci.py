@@ -1,5 +1,9 @@
 """Check that multi-node validation uses the candidate and preserves evidence."""
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
@@ -99,3 +103,53 @@ def test_ray_head_healthcheck_requires_available_jobs_api(error):
                 exec(command[3], {})
             response.close.assert_not_called()
     request.assert_called_once_with("http://127.0.0.1:8265/api/version", timeout=2)
+
+
+@pytest.mark.parametrize("pythonpath", [None, "", "custom"])
+def test_single_node_entrypoint_exposes_helpers_to_child_python(tmp_path, pythonpath):
+    root = Path(__file__).parents[2]
+    commands = tmp_path / "bin"
+    commands.mkdir()
+    docker = commands / "docker"
+    docker.write_text("#!/bin/sh\nexit 0\n")
+    docker.chmod(0o755)
+    report = tmp_path / "python-path.json"
+    probe = commands / "python-probe"
+    probe.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "import log_capture, ray_clickhouse\n"
+        f"Path({str(report)!r}).write_text(json.dumps({{\n"
+        "    'helper': log_capture.__file__,\n"
+        "    'package': ray_clickhouse.__file__,\n"
+        "    'pythonpath': os.environ.get('PYTHONPATH', '')\n"
+        "}))\n"
+    )
+    probe.chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+        "RAY_CLICKHOUSE_PYTHON": str(probe),
+        "RAY_CLICKHOUSE_IT_ARTIFACT_DIR": str(tmp_path / "artifacts"),
+    }
+    environment.pop("PYTHONPATH", None)
+    supplied_path = str(tmp_path / "caller-modules") if pythonpath == "custom" else ""
+    if pythonpath is not None:
+        environment["PYTHONPATH"] = supplied_path
+    result = subprocess.run(
+        ["bash", str(root / "scripts/run_clickhouse_it.sh")],
+        cwd=root,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    observed = json.loads(report.read_text())
+    assert Path(observed["helper"]).resolve() == root / "tests/log_capture.py"
+    assert (
+        Path(observed["package"]).resolve() == root / "src/ray_clickhouse/__init__.py"
+    )
+    if supplied_path:
+        assert supplied_path in observed["pythonpath"].split(os.pathsep)

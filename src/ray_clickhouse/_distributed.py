@@ -29,6 +29,7 @@ from ray_clickhouse._errors import (
     SchemaError,
     TransportError,
 )
+from ray_clickhouse._logging import discovery
 from ray_clickhouse._models import (
     ClickHouseConnection,
     QualifiedTable,
@@ -48,6 +49,34 @@ from ray_clickhouse._schema import (
 
 class NotApplicable(Exception):
     """A known, valid configuration outside the local-read profile."""
+
+    @property
+    def reason_code(self) -> str:
+        # Only fixed connector reasons are eligible for structured logging.
+        reasons = {
+            "computed aliases require logical-source reading": "computed_alias",
+            "query settings are outside the local-read allowlist": (
+                "query_settings_not_reusable"
+            ),
+            "client options cannot be safely reused across hosts": (
+                "client_options_not_reusable"
+            ),
+            "local HTTPS routing requires certificate verification": (
+                "certificate_verification_required"
+            ),
+            "required metadata field is unavailable": "metadata_capability_unavailable",
+            "required system table is unavailable": "metadata_capability_unavailable",
+            "related row policies require logical-source reading": "row_policy",
+            "row policies on discovery metadata require logical reading": (
+                "metadata_row_policy"
+            ),
+        }
+        message = self.args[0] if len(self.args) == 1 else None
+        return (
+            reasons.get(message, "local_conversion_not_applicable")
+            if type(message) is str
+            else "local_conversion_not_applicable"
+        )
 
 
 # Resource settings do not change row membership or scalar comparison semantics.
@@ -821,6 +850,7 @@ def metadata_reader(
                 raise TransportError("failed to close local discovery client") from None
 
 
+@discovery("target", fallback=NotApplicable)
 def resolve_distributed(
     connection: ClickHouseConnection,
     table: QualifiedTable,

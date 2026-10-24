@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -14,12 +16,15 @@ from ray_clickhouse._errors import (
     RayClickHouseError,
     SchemaError,
 )
+from ray_clickhouse._logging import current_context, emit, error_type, stage
 from ray_clickhouse._models import (
     ClickHouseConnection,
     QualifiedTable,
     ResourceLimits,
     validate_identifier,
 )
+
+logger = logging.getLogger(__name__)
 
 _CREATE_ENGINES = frozenset(
     {
@@ -169,6 +174,8 @@ def create_or_replace_table(
     order_by: Sequence[str] | None,
     nullable_columns: Sequence[str] | None = None,
 ) -> None:
+    context = current_context().execution()
+    started = time.monotonic()
     if mode not in {"create", "overwrite"}:
         raise ConfigurationError("table management mode must be create or overwrite")
     validate_create_engine(engine)
@@ -182,17 +189,27 @@ def create_or_replace_table(
     client: Any | None = None
     drop_started = False
     try:
-        client = _open(connection, limits)
+        with stage(
+            logger,
+            context,
+            "clickhouse.table_management",
+            "client_setup",
+            write_mode=mode,
+        ):
+            client = _open(connection, limits)
         settings, transport_settings = _query_context(
             connection, limits, f"{mode}-table-exists"
         )
-        result = client.query(
-            "SELECT count() FROM system.tables "
-            "WHERE database = %(database)s AND name = %(table)s",
-            parameters={"database": table.database, "table": table.table},
-            settings=settings,
-            transport_settings=transport_settings,
-        )
+        with stage(
+            logger, context, "clickhouse.table_management", "exists", write_mode=mode
+        ):
+            result = client.query(
+                "SELECT count() FROM system.tables "
+                "WHERE database = %(database)s AND name = %(table)s",
+                parameters={"database": table.database, "table": table.table},
+                settings=settings,
+                transport_settings=transport_settings,
+            )
         exists = bool(result.result_rows and int(result.result_rows[0][0]))
         if mode == "create" and exists:
             raise ConfigurationError(f"ClickHouse table {table} already exists")
@@ -201,22 +218,51 @@ def create_or_replace_table(
             settings, transport_settings = _query_context(
                 connection, limits, "overwrite-drop"
             )
-            client.command(
-                f"DROP TABLE {table.sql()}",
-                settings=settings,
-                transport_settings=transport_settings,
-            )
+            with stage(
+                logger,
+                context,
+                "clickhouse.table_management",
+                "drop",
+                write_mode=mode,
+                drop_attempted=True,
+            ):
+                client.command(
+                    f"DROP TABLE {table.sql()}",
+                    settings=settings,
+                    transport_settings=transport_settings,
+                )
         settings, transport_settings = _query_context(
             connection, limits, f"{mode}-table-create"
         )
-        client.command(
-            ddl,
-            settings=settings,
-            transport_settings=transport_settings,
-        )
+        with stage(
+            logger,
+            context,
+            "clickhouse.table_management",
+            "create",
+            write_mode=mode,
+            drop_attempted=drop_started,
+        ):
+            client.command(
+                ddl,
+                settings=settings,
+                transport_settings=transport_settings,
+            )
     except AmbiguousTableManagementError:
         raise
-    except RayClickHouseError:
+    except RayClickHouseError as exc:
+        emit(
+            logger,
+            "clickhouse.table_management.finished",
+            context,
+            level=logging.ERROR,
+            phase="management",
+            role="driver",
+            status="ambiguous" if drop_started else "failed",
+            drop_attempted=drop_started,
+            write_mode=mode,
+            error_type=error_type(exc),
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
         if drop_started:
             raise AmbiguousTableManagementError(
                 f"ClickHouse overwrite for {table} may have dropped the old table "
@@ -226,6 +272,19 @@ def create_or_replace_table(
     except BaseException as exc:
         if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
             raise
+        emit(
+            logger,
+            "clickhouse.table_management.finished",
+            context,
+            level=logging.ERROR,
+            phase="management",
+            role="driver",
+            status="ambiguous" if drop_started else "failed",
+            drop_attempted=drop_started,
+            write_mode=mode,
+            error_type=error_type(exc),
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
         if drop_started:
             raise AmbiguousTableManagementError(
                 f"ClickHouse overwrite for {table} may have dropped the old table "
@@ -236,5 +295,15 @@ def create_or_replace_table(
         if client is not None:
             try:
                 client.close()
-            except Exception:
-                pass
+            except Exception as error:
+                emit(
+                    logger,
+                    "clickhouse.cleanup.failed",
+                    context,
+                    level=logging.WARNING,
+                    phase="cleanup",
+                    status="failed",
+                    role="driver",
+                    resource_kind="ddl_client",
+                    error_type=error_type(error),
+                )
