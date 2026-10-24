@@ -1131,3 +1131,65 @@ dangling image identities are unchanged. No shared resources or cache were
 removed. Repair artifacts include the final cumulative diff, requirement map
 and static audit. The earlier full-suite result is retained separately; no new
 full-suite or Ray compatibility run is claimed. Commit, push and PR did not run.
+
+## PR 26 single-node worker import correction
+
+The user authorized the confirmed CI repair on 2026-10-24. On head `b6d1f50`,
+the single-node ClickHouse job reported 8 failed and 142 passed tests. Each
+failure was a Ray worker import error for the new `log_capture` helper, before
+its logging assertion ran. Pytest's configured `pythonpath` affects the driver;
+the plain single-node runner did not export the test directory to worker
+processes. Explicit local `PYTHONPATH=src:tests` masked this entry-point gap.
+
+Export the checkout's source/test paths at the existing pytest launch boundary,
+preserve caller-supplied paths, and verify unset, empty and custom `PYTHONPATH`
+with fresh child interpreters through the actual shell entry point. Docker is
+stubbed only in the fast script test; the real suite below uses the existing
+fixed ClickHouse image, real clients and local Ray workers.
+
+| Suite | Coverage / state | Reason and overlap | Result |
+| --- | --- | --- | --- |
+| Entry-point regression proof | Three fresh-interpreter cases with unset/empty/custom caller paths; actual script with a Docker stub | Prove the path propagation defect before the script correction; no infrastructure | All three failed with `ModuleNotFoundError: log_capture`; `pr26-import-fix/regression-before.log` |
+| Corrected short/static validation | Non-Ray units/contracts, Ruff, strict mypy and shell syntax | New script-environment behavior needs direct regression coverage; connector source is unchanged | 968 passed, zero failures/errors/skips; `pr26-import-fix/short.xml`; static checks passed |
+| Single-node validation attempt | Intended complete integration selection, cleared caller `PYTHONPATH` | The invocation mistakenly supplied `-o junit_family=legacy` without an explicit `tests/integration` target, so the script forwarded only flags and pytest collected unrelated directories | Collection error due to duplicate test module names; no intended integration cases executed; not passing evidence; `pr26-import-fix/single-node` |
+
+Record the exact invocation, changed-input hashes, versions, pytest XML/logs and
+owned resource cleanup. Keep the primary 26.8/23.3 and Ray compatibility CI
+successes as separate evidence. The 24.8 cluster job failed pulling Keeper from
+the mirror before pytest started; it is an infrastructure failure, not a reason
+to alter connector code or silently repeat unrelated suites. Commit, push,
+remote reruns and merge are not part of this repair execution.
+
+The implementation is frozen at two added shell lines plus three direct
+entry-point regressions. Native validation uses the existing Python 3.12.12,
+Ray 2.58.0, PyArrow 19.0.1 and clickhouse-connect 1.5.0 environment. The short
+regressions prove child-process imports and caller-path preservation without
+Docker or Ray startup. The failed infrastructure attempt exited during
+collection; its error does not establish the real-worker result.
+
+Cleanup readback found no owned container, network or volume for
+`ray-clickhouse-it`; normalized dangling-image identities are unchanged.
+The corrected full command must explicitly select `tests/integration` before
+`-o junit_family=legacy`, retain a cleared caller `PYTHONPATH`, and use a new
+artifact directory `pr26-import-fix/single-node-final`. Additional infrastructure
+execution awaits renewed user approval under the long-test execution agreement.
+No workaround suite, remote rerun or repeat of passing cluster jobs was run.
+
+The user subsequently explicitly approved one additional full single-node run.
+The corrected invocation selects `tests/integration` and uses
+`pr26-import-fix/single-node-final`, with caller `PYTHONPATH` unset. Production
+code, runner code, tests and runtime are unchanged from the passing short
+validation; only evidence records changed. This is the sole approved additional
+infrastructure run, with no preceding targeted IT and no cluster rerun.
+Result: 150 passed, 3 cluster cases deselected, zero failures/errors/skips,
+50.385 seconds; all eight logging cases passed and retained bounded worker
+events in JUnit properties. Eighteen existing warnings remain visible. Evidence:
+`pr26-import-fix/single-node-final/pytest.xml` and `result-summary.json`.
+
+Frozen runner/test/config hashes match the execution plan. Post-run readback
+confirms no owned container, network or volume remains; normalized dangling-image
+identities are unchanged. No further IT or remote job rerun was performed.
+The single-node import correction and local validation are complete. Remote CI
+still refers to the published head; these uncommitted changes have not been
+published. The 24.8 mirror timeout and Greptile credit shortage remain separate
+external conditions.

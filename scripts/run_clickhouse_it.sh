@@ -65,5 +65,7 @@ pytest_targets=("$@")
 if [[ "$#" -eq 0 ]]; then
     pytest_targets=(tests/integration)
 fi
+# Pytest's pythonpath setting does not reach Ray worker processes.
+export PYTHONPATH="${PWD}/src:${PWD}/tests${PYTHONPATH:+:${PYTHONPATH}}"
 "$python_bin" -m pytest "${pytest_targets[@]}" -m "integration and not cluster" -vv \
     --junitxml="$artifact_dir/pytest.xml" 2>&1 | tee "$artifact_dir/pytest.log"
