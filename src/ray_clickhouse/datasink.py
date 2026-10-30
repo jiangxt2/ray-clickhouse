@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Iterable, Mapping
-from contextlib import nullcontext
 from typing import Any
 
 import pyarrow as pa
@@ -15,21 +14,7 @@ from ray.data.datasource import Datasink
 from ray_clickhouse._compat import prepare_write_remote_args
 from ray_clickhouse._ddl import create_or_replace_table, validate_create_engine
 from ray_clickhouse._discovery import discover_target
-from ray_clickhouse._errors import (
-    AmbiguousWriteError,
-    ConfigurationError,
-    SchemaError,
-    WriteError,
-)
-from ray_clickhouse._logging import (
-    LogContext,
-    ProgressBudget,
-    emit,
-    error_type,
-    runtime_fields,
-    stage,
-    use_context,
-)
+from ray_clickhouse._errors import ConfigurationError, WriteError
 from ray_clickhouse._models import (
     ClickHouseConnection,
     InsertMode,
@@ -78,7 +63,6 @@ class ClickHouseDataSink(Datasink[dict[str, object]]):
                 "nullable_columns is only valid for create/overwrite"
             )
         self._connection = connection
-        self._log_context = LogContext.create(from_environment=True)
         self._table = table
         self._insert_mode = insert_mode
         self._write_mode = write_mode
@@ -104,47 +88,35 @@ class ClickHouseDataSink(Datasink[dict[str, object]]):
         return "ClickHouseWrite"
 
     def on_write_start(self, schema: pa.Schema | None = None) -> None:
-        with use_context(self._log_context):
-            self._prepare_write(schema)
-
-    def _prepare_write(self, schema: pa.Schema | None) -> None:
+        started = time.monotonic()
+        logger.debug("ClickHouse write preparation starting mode=%s", self._write_mode)
         if self._write_mode in {"create", "overwrite"}:
             if schema is None:
                 raise ConfigurationError(
                     "create/overwrite requires the Ray Dataset to provide "
                     "an Arrow schema"
                 )
-            with stage(
-                logger,
-                self._log_context,
-                "clickhouse.write.prepare",
-                "table_management",
-            ):
-                create_or_replace_table(
-                    self._connection,
-                    self._table,
-                    self._limits,
-                    schema,
-                    mode=self._write_mode,
-                    engine=self._engine,
-                    order_by=self._order_by,
-                    nullable_columns=self._nullable_columns,
-                )
-        with stage(logger, self._log_context, "clickhouse.write.prepare", "target"):
-            self._target = discover_target(self._connection, self._table, self._limits)
+            create_or_replace_table(
+                self._connection,
+                self._table,
+                self._limits,
+                schema,
+                mode=self._write_mode,
+                engine=self._engine,
+                order_by=self._order_by,
+                nullable_columns=self._nullable_columns,
+            )
+        logger.debug("ClickHouse write target discovery starting")
+        self._target = discover_target(self._connection, self._table, self._limits)
         self._source_schema = schema
         if schema is not None:
-            with stage(
-                logger,
-                self._log_context,
-                "clickhouse.write.prepare",
-                "schema",
-                expected_fields=len(self._target.columns),
-                actual_fields=len(schema),
-            ):
-                self._source_columns = validate_source_schema(
-                    schema, self._target, self._columns
-                )
+            self._source_columns = validate_source_schema(
+                schema, self._target, self._columns
+            )
+        logger.debug(
+            "ClickHouse write preparation ready elapsed_ms=%.1f",
+            (time.monotonic() - started) * 1000,
+        )
 
     def write(self, blocks: Iterable[Any], ctx: Any) -> dict[str, object]:
         del ctx
@@ -152,97 +124,48 @@ class ClickHouseDataSink(Datasink[dict[str, object]]):
             raise ConfigurationError(
                 "ClickHouseDataSink.on_write_start must run before write"
             )
-        context = self._log_context.execution()
-        runtime = runtime_fields(worker=True)
-        progress = ProgressBudget(context, logger)
-        started = time.monotonic()
         session = ClickHouseInsertSession(
             self._connection,
             self._limits,
             database=self._table.database,
             table=self._table.table,
             insert_mode=self._insert_mode,
-            log_context=context,
         )
         total_rows = 0
         total_bytes = 0
         total_batches = 0
         failure: BaseException | None = None
-        first_prepare = True
-        mismatch_fields: dict[str, object] = {}
+        started = time.monotonic()
+        logger.debug("ClickHouse write task starting insert_mode=%s", self._insert_mode)
         try:
             session.start()
             for block in blocks:
-                preparation = (
-                    stage(
-                        logger,
-                        context,
-                        "clickhouse.write.prepare",
-                        "block_prepare",
-                        role="worker",
+                arrow_table = BlockAccessor.for_block(block).to_arrow()
+                if not isinstance(arrow_table, pa.Table):
+                    raise WriteError("Ray produced a non-Arrow write block")
+                if self._source_schema is None:
+                    self._source_schema = arrow_table.schema
+                    self._source_columns = validate_source_schema(
+                        self._source_schema, self._target, self._columns
                     )
-                    if first_prepare
-                    else nullcontext()
+                if self._source_columns is None:
+                    raise WriteError(
+                        "write schema validation did not produce a target plan"
+                    )
+                prepared = prepare_arrow_table(
+                    arrow_table,
+                    self._source_schema,
+                    self._source_columns,
                 )
-                first_prepare = False
-                arrow_table: object = None
-                try:
-                    with preparation:
-                        arrow_table = BlockAccessor.for_block(block).to_arrow()
-                        if not isinstance(arrow_table, pa.Table):
-                            raise WriteError("Ray produced a non-Arrow write block")
-                        if self._source_schema is None:
-                            self._source_schema = arrow_table.schema
-                            self._source_columns = validate_source_schema(
-                                self._source_schema, self._target, self._columns
-                            )
-                        if self._source_columns is None:
-                            raise WriteError(
-                                "write schema validation did not produce a target plan"
-                            )
-                        prepared = prepare_arrow_table(
-                            arrow_table,
-                            self._source_schema,
-                            self._source_columns,
-                        )
-                except (SchemaError, WriteError):
-                    mismatch_fields = {
-                        "mismatch_category": "schema_validation",
-                        "expected_fields": len(self._source_schema)
-                        if self._source_schema is not None
-                        else None,
-                        "actual_fields": len(arrow_table.schema)
-                        if isinstance(arrow_table, pa.Table)
-                        else None,
-                    }
-                    raise
                 for batch in iter_batch_slices(
                     prepared,
                     max_rows=self._limits.batch_rows,
                     max_bytes=self._limits.batch_bytes,
                 ):
-                    result = session.insert(batch)
+                    session.insert(batch)
                     total_rows += batch.num_rows
                     total_bytes += batch.nbytes
                     total_batches += 1
-                    if progress.admit():
-                        emit(
-                            logger,
-                            "clickhouse.write.progress",
-                            context,
-                            phase="insert",
-                            status="confirmed",
-                            role="worker",
-                            client_insert_id=result.get("query_id")
-                            if isinstance(result, Mapping)
-                            else None,
-                            batch_index=total_batches,
-                            batches=total_batches,
-                            confirmed_rows=total_rows,
-                            arrow_bytes=total_bytes,
-                            insert_mode=self._insert_mode,
-                            **runtime,
-                        )
             return {
                 "rows": total_rows,
                 "bytes": total_bytes,
@@ -251,45 +174,25 @@ class ClickHouseDataSink(Datasink[dict[str, object]]):
             }
         except BaseException as exc:
             failure = exc
+            logger.error(
+                "ClickHouse write task failed error_type=%s", type(exc).__name__
+            )
             raise
         finally:
-            cleanup_failed = False
+            logger.debug(
+                "ClickHouse write task stopped confirmed_batches=%d confirmed_rows=%d "
+                "confirmed_arrow_bytes=%d elapsed_ms=%.1f",
+                total_batches,
+                total_rows,
+                total_bytes,
+                (time.monotonic() - started) * 1000,
+            )
             try:
                 session.close()
             except Exception:
-                cleanup_failed = True
+                logger.warning("ClickHouse write session close failed")
                 if failure is None:
                     raise
-            finally:
-                emit(
-                    logger,
-                    "clickhouse.write.finished",
-                    context,
-                    level=logging.ERROR
-                    if failure is not None or cleanup_failed
-                    else logging.DEBUG,
-                    phase="cleanup"
-                    if cleanup_failed
-                    else "block_prepare"
-                    if mismatch_fields
-                    else "write",
-                    role="worker",
-                    status="ambiguous"
-                    if isinstance(failure, AmbiguousWriteError)
-                    else (
-                        "failed"
-                        if failure is not None or cleanup_failed
-                        else "confirmed"
-                    ),
-                    error_type=error_type(failure) if failure else None,
-                    batches=total_batches,
-                    confirmed_rows=total_rows,
-                    arrow_bytes=total_bytes,
-                    suppressed_progress=progress.suppressed,
-                    duration_ms=(time.monotonic() - started) * 1000,
-                    **mismatch_fields,
-                    **runtime,
-                )
 
     def on_write_complete(self, write_result: Any) -> None:
         returns = getattr(write_result, "write_returns", ())
@@ -303,35 +206,17 @@ class ClickHouseDataSink(Datasink[dict[str, object]]):
             int(item.get("batches", 0)) for item in returns if isinstance(item, Mapping)
         )
         self._receipt = WriteReceipt(rows, bytes_written, batches)
-        emit(
-            logger,
-            "clickhouse.write.finished",
-            self._log_context,
-            level=logging.INFO,
-            phase="completion",
-            role="driver",
-            status="noop"
-            if not returns and getattr(write_result, "num_rows", None) == 0
-            else "confirmed",
-            confirmed_rows=rows,
-            arrow_bytes=bytes_written,
-            batches=batches,
-            **runtime_fields(),
+        logger.info(
+            "ClickHouse write complete confirmed_batches=%d confirmed_rows=%d "
+            "confirmed_arrow_bytes=%d",
+            batches,
+            rows,
+            bytes_written,
         )
 
     def on_write_failed(self, error: Exception) -> None:
         self._receipt = None
-        emit(
-            logger,
-            "clickhouse.write.finished",
-            self._log_context,
-            level=logging.ERROR,
-            phase="completion",
-            role="driver",
-            status="failed",
-            error_type=error_type(error),
-            **runtime_fields(),
-        )
+        logger.error("ClickHouse write failed error_type=%s", type(error).__name__)
 
 
 def validate_write_remote_args(

@@ -27,7 +27,8 @@ class _FailingStream(_Stream):
         raise RuntimeError("Arrow stream failed")
 
 
-def test_stream_query_slices_blocks_and_closes_client() -> None:
+def test_stream_query_slices_blocks_and_closes_client(caplog) -> None:
+    caplog.set_level("DEBUG", logger="ray_clickhouse")
     schema = pa.schema([("id", pa.uint64()), ("value", pa.string())])
     table = pa.table(
         {
@@ -54,6 +55,12 @@ def test_stream_query_slices_blocks_and_closes_client() -> None:
     assert [block.column("id").to_pylist() for block in blocks] == [[1, 2], [3, 4], [5]]
     client.query_arrow_stream.assert_called_once()
     client.close.assert_called_once()
+    query_id = client.query_arrow_stream.call_args.kwargs["settings"]["query_id"]
+    assert caplog.text.count("ClickHouse first block") == 1
+    assert f"query_id={query_id} blocks=3 rows=5" in caplog.text
+    assert f"arrow_bytes={sum(block.nbytes for block in blocks)}" in caplog.text
+    assert "elapsed_ms=" in caplog.text
+    assert query.sql not in caplog.text
 
 
 def test_stream_query_uses_query_id_setting() -> None:
@@ -78,7 +85,8 @@ def test_stream_query_uses_query_id_setting() -> None:
     )
 
 
-def test_stream_query_attaches_query_log_diagnostic() -> None:
+def test_stream_query_attaches_query_log_diagnostic(caplog) -> None:
+    caplog.set_level("DEBUG", logger="ray_clickhouse")
     schema = pa.schema([("id", pa.uint64())])
     client = MagicMock()
     client.query_arrow_stream.return_value = _FailingStream([])
@@ -129,6 +137,10 @@ def test_stream_query_attaches_query_log_diagnostic() -> None:
     assert read_kwargs["settings"]["log_queries"] == 1
     client.close.assert_called_once()
     diagnostic_client.close.assert_called_once()
+    assert f"read failed query_id={error.query_id} error_type=ReadError" in caplog.text
+    assert "blocks=0 rows=0" in caplog.text
+    assert "ClickHouse first block" not in caplog.text
+    assert "mid-stream failure" not in caplog.text
 
 
 def test_stream_query_diagnostic_failure_does_not_mask_original_error() -> None:
@@ -173,7 +185,7 @@ def test_stream_query_accepts_clickhouse_record_batches() -> None:
     assert [block.column("id").to_pylist() for block in blocks] == [[1, 2]]
 
 
-def test_insert_transport_failure_is_ambiguous() -> None:
+def test_insert_transport_failure_is_ambiguous(caplog) -> None:
     client = MagicMock()
     client.insert_arrow.side_effect = RuntimeError("connection reset")
     connection = ClickHouseConnection(host="clickhouse", database="analytics")
@@ -191,3 +203,31 @@ def test_insert_transport_failure_is_ambiguous() -> None:
         with pytest.raises(AmbiguousWriteError):
             session.insert(table)
         session.close()
+    assert "client_insert_id=ray-clickhouse-insert-" in caplog.text
+    assert "outcome=unknown" in caplog.text
+    assert "connection reset" not in caplog.text
+
+
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_read_early_close_logs_partial_counts_without_success(caplog, close_fails):
+    caplog.set_level("DEBUG", logger="ray_clickhouse")
+    table = pa.table({"id": [1, 2, 3]})
+    client = MagicMock()
+    client.query_arrow_stream.return_value = _Stream([table])
+    if close_fails:
+        client.close.side_effect = RuntimeError("private client error")
+    with patch("clickhouse_connect.get_client", return_value=client):
+        blocks = stream_query(
+            ClickHouseConnection(
+                host="private-host", database="analytics", password="secret-password"
+            ),
+            QuerySpec("SELECT private_sql", (), table.schema),
+            ResourceLimits(batch_rows=1),
+        )
+        next(blocks)
+        blocks.close()
+    assert "blocks=1 rows=1" in caplog.text
+    assert "succeeded" not in caplog.text
+    assert ("client close failed" in caplog.text) == close_fails
+    assert not any(word in caplog.text for word in ("private", "secret", "SELECT"))
+    client.close.assert_called_once()

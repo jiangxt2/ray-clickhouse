@@ -39,6 +39,44 @@ the client-side named form; quoted/commented placeholder-looking text with
 active bindings is rejected. Metadata discovery adds two requests and is not a
 snapshot or a guarantee of zero scan work.
 
+## Debug logging
+
+Configure logging when the application initializes Ray:
+
+```python
+import ray
+
+ray.init(
+    logging_config=ray.LoggingConfig(
+        encoding="TEXT", log_level="DEBUG", additional_log_standard_attrs=["name"]
+    )
+)
+```
+
+Ray configures the root logger in the driver and workers and adds its job, task,
+worker and node context. Use `encoding="JSON"` for structured output. This sets
+the job's root log level; applications can also use standard Python logging
+configuration for more selective filtering. The connector uses module loggers
+under `ray_clickhouse` and does not install handlers or initialize Ray.
+
+Debug messages show discovery and cache reuse, actual split plans, stream setup,
+first-block latency, write preparation, and DDL stages. Read messages reuse the
+existing `query_id`. `client_insert_id` in insert failure messages is a local
+identifier and is not a guaranteed server query-log lookup key.
+
+Read `blocks` and `rows` count yielded blocks and rows; write `confirmed_*` counts
+only batches acknowledged by ClickHouse. Byte counts are Arrow memory sizes,
+not network traffic. `elapsed_ms` is client wall-clock duration measured with a
+monotonic clock. A `stopped` message reports local progress, including partial
+consumption or failure; it does not assert successful cleanup or a completed
+Dataset. The driver logs a write completion summary only in the normal Ray
+completion callback, including zero counts for an empty write.
+
+There are no per-batch logs or additional connector logging switches. New log
+messages exclude SQL, parameter values, credentials, connection configuration,
+row values, full schemas, and raw exception messages. Changing the log level
+does not add queries or retries or enable `diagnostic_flush_logs`.
+
 ## Arrow stream failures and query diagnostics
 
 Inspect `error.client_diagnostic` for the underlying exception type, operation,
@@ -64,112 +102,6 @@ ORDER BY event_time_microseconds DESC;
 ```
 
 The connector never replays a failed read. If `system.query_log` is unavailable, the client diagnostic and query id remain available.
-
-## Execution logging
-
-The connector emits standard Python logging records through its module loggers
-under `ray_clickhouse`. The application owns levels, handlers, formatters and
-worker initialization. The library does not install handlers, change the root
-logger, write files, or start upload threads. Configure both driver and worker
-output; changing a driver logger does not configure remote workers.
-
-An independent Ray application can use an application-owned setup function:
-
-```python
-import logging
-import os
-
-import ray
-
-
-def configure_connector_logging():
-    logger = logging.getLogger("ray_clickhouse")
-    logger.setLevel(logging.DEBUG)
-    handler = logging.StreamHandler()
-    handler.setLevel(logging.DEBUG)
-    handler.setFormatter(
-        logging.Formatter(
-            "%(levelname)s %(event)s phase=%(phase)s status=%(status)s "
-            "operation=%(operation_id)s execution=%(execution_id)s "
-            "query=%(query_id)s insert=%(client_insert_id)s %(message)s",
-            defaults={
-                "event": "-",
-                "phase": "-",
-                "status": "-",
-                "operation_id": "-",
-                "execution_id": "-",
-                "query_id": "-",
-                "client_insert_id": "-",
-            },
-        )
-    )
-    logger.addHandler(handler)
-    logger.propagate = False
-
-
-configure_connector_logging()  # Once in this application's driver.
-ray.init(runtime_env={"worker_process_setup_hook": configure_connector_logging})
-os.environ["RAY_CLICKHOUSE_LOG_BATCHES"] = "1"  # Optional; set before construction.
-# Construct read_clickhouse(...) or call write_clickhouse(...) here.
-```
-
-Handler levels and `propagate` remain application choices. The formatter's
-defaults handle optional fields and existing records that have no event fields.
-A JSON formatter can serialize the same event attributes; the connector does
-not serialize records or replace the application's formatter.
-
-For a Tributo application, integrate the same setup function into its
-application bootstrap and worker initialization, alongside existing handlers.
-Select the connector's module levels there; do not configure output within a
-Provider or Binding. Leave network delivery, persistence and any upload switch
-to the application. Enabling application log delivery does not enable connector
-DEBUG or batch details automatically. The connector has no Tributo dependency.
-
-`RAY_CLICKHOUSE_LOG_BATCHES` accepts exactly `0` or `1` and defaults to `0`.
-Invalid values raise `ConfigurationError` before network I/O without echoing the
-value. Each reader/sink freezes the setting at construction and serializes only
-safe IDs and the Boolean option into its tasks. Worker environment changes do
-not override the snapshot. Internal transport calls without a snapshot default
-to batch details disabled. Logger levels remain controlled by the application.
-
-INFO reports selected paths, planning summaries and driver write completion.
-DEBUG reports discovery and preparation starts/completions, stream starts,
-first data blocks, terminal counts, and the first INSERT's start/confirmation.
-Failed events use ERROR and cleanup warnings use WARNING. Expected local-read
-fallbacks finish at DEBUG with `status=fallback` and a fixed safe `reason_code`;
-they are not execution failures. Progress requires both the batch option and
-DEBUG: emit the first progress point, then only every
-100th point if at least one second has passed, with at most 100 records per
-stream or write task. A grouped shard task has independent budgets for each
-actual stream. First-request stages and failures are outside this sampling.
-There are no periodic heartbeats; a blocked first request retains its started
-event even when batch logging is disabled.
-
-| Fields | Meaning |
-| --- | --- |
-| `event`, `phase`, `status`, `role` | Fixed event/phase categories and observed outcome; driver and worker scopes differ |
-| `operation_id`, `plan_id`, `split_id`, `execution_id` | Generated identities; repeated planning and actual stream executions receive new IDs |
-| `query_id`, `client_insert_id` | Existing read request ID versus locally generated INSERT identity; neither implies exactly-once delivery |
-| `duration_ms` | Local monotonic elapsed time; stream elapsed includes downstream pauses and INSERT elapsed includes async confirmation waiting |
-| `emitted_rows`, `emitted_blocks`, `arrow_bytes` | Observed Arrow output; bytes describe memory size, not network traffic |
-| `confirmed_rows`, `batches`, `suppressed_progress` | Known local confirmations and suppressed progress; a failed task's totals do not prove Dataset success |
-
-Schema-only empty output has no first-data-block latency. Query-mode events do
-not claim a table engine or physical split. A local-shard parent plan omits
-`split_mode`; its child plans report the physical split mode. Write validation
-failures include a safe mismatch category and known field counts, including
-failures after earlier blocks were confirmed, without logging every preparation.
-Cached metadata does not imply database snapshot isolation. Read terminal
-outcomes distinguish EOF success,
-consumer closure, cancellation and failure; a close failure cannot become
-success. Driver callbacks are best effort and a killed process may leave no
-terminal event. Missing events or unknown counters never prove success.
-
-New events exclude SQL/filter text, bound values, full schemas/settings,
-credentials, row data, raw exception text and diagnostic dictionaries. Identifiers
-and enum fields are bounded and reject multiline values. Keep existing exception
-diagnostics separate from structured event fields. Logging cannot add discovery,
-diagnostic lookup, log flushing, INSERT, DDL, retries or Dataset actions.
 
 ## Integration artifacts
 

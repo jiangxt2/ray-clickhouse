@@ -245,6 +245,11 @@ write_clickhouse(
 )
 ```
 
+The connector uses standard `ray_clickhouse.*` loggers. Enable `DEBUG` with
+Ray's public `ray.LoggingConfig` to see planning, first-block latency, and read/write
+summaries in driver and worker logs. See [debug logging](doc/source/troubleshooting.md#debug-logging)
+for setup and field meanings. The connector does not install handlers or change Ray settings.
+
 When diagnosing an Arrow or transport failure, set `diagnostic_flush_logs=True` on
 `read_clickhouse()` if the ClickHouse account may run `SYSTEM FLUSH LOGS`:
 
@@ -266,20 +271,6 @@ diagnostic and query ID remain available. Raw exception chains remain suppressed
 to protect credentials. The diagnostic text is
 server-provided and may include query context, so do not put credentials in query
 predicates or parameters.
-
-For execution events, configure the `ray_clickhouse` package logger and the
-application's handlers in both the driver and workers. DEBUG includes discovery,
-planning, stream lifecycle, preparation, first-INSERT confirmation and cleanup
-events. Set `RAY_CLICKHOUSE_LOG_BATCHES=1` before constructing a reader or sink
-to additionally request bounded DEBUG progress events; the default is `0`.
-The setting is frozen into the task configuration and does not enable DEBUG by
-itself. See [execution logging](doc/source/troubleshooting.md#execution-logging)
-for a complete driver/worker configuration and event-field meanings.
-
-Logging never configures the root logger, adds database requests or retries,
-or changes `diagnostic_flush_logs`. Read events use the existing `query_id`;
-write events use `client_insert_id`, which is a local correlation value whose
-presence in server query logs is not guaranteed.
 
 `filter` is a trusted predicate fragment, not an arbitrary SQL query.
 Use `tenant_id = {tenant:Nullable(UInt32)}` with `query_parameters={"tenant": 42}`

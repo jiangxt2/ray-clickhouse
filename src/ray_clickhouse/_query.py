@@ -16,19 +16,12 @@ from ray.data.datasource import Datasource, ReadTask
 from ray_clickhouse._compat import ensure_supported_ray_version, make_read_task
 from ray_clickhouse._discovery import discover_query_schema
 from ray_clickhouse._errors import ConfigurationError
-from ray_clickhouse._logging import (
-    LogContext,
-    current_context,
-    emit,
-    error_type,
-    runtime_fields,
-    source_context,
-    use_context,
-)
 from ray_clickhouse._models import ClickHouseConnection, QuerySpec, ResourceLimits
 from ray_clickhouse._schema import SchemaPlan, render_read_projection
 from ray_clickhouse._sql import validate_filter_parameters
 from ray_clickhouse._transport import stream_query
+
+logger = logging.getLogger(__name__)
 
 _FORBIDDEN_CONTROL = re.compile(
     r"(?<![\w.])(?:INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|RENAME|TRUNCATE|"
@@ -144,9 +137,6 @@ class QueryReadConfig:
         return f"QueryReadConfig(parameter_names={names!r})"
 
 
-logger = logging.getLogger(__name__)
-
-
 class ClickHouseQueryDatasource(Datasource):
     """Read a trusted query through one streaming worker task."""
 
@@ -155,17 +145,6 @@ class ClickHouseQueryDatasource(Datasource):
         initialize = cast(Callable[[], None], super().__init__)
         initialize()
         self._config = config
-        self._log_context = LogContext.create(from_environment=True)
-        emit(
-            logger,
-            "clickhouse.read.path_selected",
-            self._log_context,
-            level=logging.INFO,
-            phase="source",
-            status="selected",
-            role="driver",
-            read_mode="query",
-        )
         self._schema_plan: SchemaPlan | None = None
 
     @property
@@ -179,15 +158,23 @@ class ClickHouseQueryDatasource(Datasource):
     def estimate_inmemory_data_size(self) -> None:
         return None
 
-    @source_context
     def _schema(self) -> SchemaPlan:
         if self._schema_plan is None:
+            started = time.monotonic()
+            logger.debug("ClickHouse query schema discovery starting")
             self._schema_plan = discover_query_schema(
                 self._config.connection,
                 self._config.query_sql,
                 self._config.limits,
                 parameters=dict(self._config.query_parameters),
             )
+            logger.debug(
+                "ClickHouse query schema discovered columns=%d elapsed_ms=%.1f",
+                len(self._schema_plan.columns),
+                (time.monotonic() - started) * 1000,
+            )
+        else:
+            logger.debug("ClickHouse query schema cache hit")
         return self._schema_plan
 
     @property
@@ -199,60 +186,6 @@ class ClickHouseQueryDatasource(Datasource):
         parallelism: int,
         per_task_row_limit: int | None = None,
         data_context: Any | None = None,
-    ) -> list[ReadTask]:
-        context = self._log_context.plan()
-        cache_hit = self._schema_plan is not None
-        with use_context(context):
-            try:
-                self._schema()
-                started = time.monotonic()
-                tasks = self._get_read_tasks(
-                    parallelism, per_task_row_limit, data_context
-                )
-            except BaseException as error:
-                emit(
-                    logger,
-                    "clickhouse.plan.finished",
-                    context,
-                    level=logging.ERROR,
-                    phase="planning",
-                    status="failed",
-                    role="driver",
-                    error_type=error_type(error),
-                )
-                raise
-            emit(
-                logger,
-                "clickhouse.read.path_selected",
-                context,
-                level=logging.INFO,
-                phase="selection",
-                status="selected",
-                role="driver",
-                read_mode="query",
-                **runtime_fields(),
-            )
-            emit(
-                logger,
-                "clickhouse.plan.finished",
-                context,
-                level=logging.INFO,
-                phase="planning",
-                status="planned",
-                role="driver",
-                read_mode="query",
-                task_count=len(tasks),
-                cache_hit=cache_hit,
-                duration_ms=(time.monotonic() - started) * 1000,
-                **runtime_fields(),
-            )
-            return tasks
-
-    def _get_read_tasks(
-        self,
-        parallelism: int,
-        per_task_row_limit: int | None,
-        data_context: Any | None,
     ) -> list[ReadTask]:
         del parallelism, data_context
         config = self._config
@@ -266,7 +199,6 @@ class ClickHouseQueryDatasource(Datasource):
             operation="query-read",
             strict_schema=True,
         )
-        log_context = current_context().split()
 
         def read_fn() -> Iterable[pa.Table]:
             yield from stream_query(
@@ -274,9 +206,9 @@ class ClickHouseQueryDatasource(Datasource):
                 query,
                 config.limits,
                 diagnostic_flush_logs=config.diagnostic_flush_logs,
-                log_context=log_context,
             )
 
+        logger.debug("ClickHouse query read plan tasks=1")
         return [
             make_read_task(
                 read_fn,

@@ -203,7 +203,8 @@ def _schema_plan():
     return SchemaPlan(pa.schema([("id", pa.uint64()), ("value", pa.string())]), columns)
 
 
-def test_single_read_creates_one_task_without_count_estimate():
+def test_single_read_creates_one_task_without_count_estimate(caplog):
+    caplog.set_level("DEBUG", logger="ray_clickhouse")
     fake_task = object()
     with (
         patch("ray_clickhouse.datasource.ensure_supported_ray_version"),
@@ -227,6 +228,10 @@ def test_single_read_creates_one_task_without_count_estimate():
     assert "SELECT `id` FROM `analytics`.`events`" in query.sql
     assert "id >= %(minimum)s" in query.sql
     assert query.parameter_dict()["minimum"] == 1
+    assert "planning metadata ready engine=MergeTree" in caplog.text
+    assert "planning metadata cache hit" in caplog.text
+    assert "read plan split=single tasks=1" in caplog.text
+    assert "SELECT" not in caplog.text
 
 
 def test_single_read_supports_view_engine_and_order_by():

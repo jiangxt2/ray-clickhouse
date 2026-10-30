@@ -1044,152 +1044,28 @@ Its result and all CI outcomes must be rechecked against the new PR head before
 reporting completion. Failed setup logs and the uploaded Compose evidence are
 retained; setup failure is not reported as a failing predicate test.
 
-## Debug logging implementation validation
+## Standard Ray logging
 
-Authorized on 2026-10-23 for the `debug-logging` worktree, base `1cfdb04`.
-Changes add observation only: frozen Boolean configuration, safe correlation,
-discovery/preparation/request stages, bounded progress and resource outcomes.
-No dependency, protocol, SQL, retry or receipt change is authorized.
+The approved simplification uses module loggers and Ray's public logging
+configuration. It removes the custom event/context/sampling framework and its
+test-only worker import dependency. The existing read/insert/DDL calls, retries,
+receipts, and cleanup semantics remain the baseline for comparison.
 
-| Suite | Scope and code state | Reason and overlap | Result |
+| Suite | Coverage and independent reason | Execution limit | Result |
 | --- | --- | --- | --- |
-| Affected development units | Transport, datasource, query, distributed planning, datasink, DDL and diagnostics | Fast regression during implementation; superseded by final short validation | 246 passed |
-| Final short unit/contract suite, excluding the separately executed Ray marker | Full non-runtime scope, including all 35 logging units | Fast checks; the 22 Ray contracts below are separate coverage, not skipped failures | 948 passed, 3.33s; `.artifacts/debug-logging/short.xml` |
-| Ray contract suite | `tests/contract -m ray`, native Python 3.12.12/Ray 2.58.0 from the existing environment; fingerprint `123142449bcefad0` | Public callbacks, empty writes, projection/predicate clones and serialization; one local runtime execution | 22 passed, 16.20s; four existing Ray warnings; `.artifacts/debug-logging/ray-contract.xml` |
-| Local real-protocol logging | `scripts/run_clickhouse_it.sh tests/integration/test_logging.py::test_read_events_reach_real_worker[table]` | One native driver/worker path; does not repeat the full integration suite | 1 passed, 5.79s; one JUnit-property format warning; events retained in XML; owned container/network removed |
-| Final combined cluster | `scripts/run_distributed_it.sh tests/integration tests/distributed -o junit_family=legacy`; Linux Python 3.12.14, Ray 2.59.0, PyArrow 19.0.1, ClickHouse 26.8.1.2041 at the script's pinned digests | One complete run covers ordinary and actual shard topology; no extra default cluster run or compatibility baselines | 269 passed, zero skipped/errors/failures, 262.71s; 34 existing dependency/API warnings; `.artifacts/debug-logging/cluster/pytest.xml` |
+| Unit and contract tests | Existing behavior plus concise log/count/safety assertions, including real Ray contracts | One complete run and a short correction of three new fixtures; no repeated Ray contracts | 938 distinct cases covered: 935 initially passed; after adding the missing required database to three new fixtures, all 11 cases in the two affected unit files passed |
+| `scripts/run_clickhouse_it.sh tests/integration` | Real ClickHouse protocol and native Python/Ray worker import path, including a worker log capture using only standard logging | One final complete single-node run | 143 passed, 3 cluster cases deselected, zero failures/errors/skips; 47.98s; cleanup completed |
+| `scripts/run_distributed_it.sh tests/integration tests/distributed` | Container Ray workers, ordinary reads/writes and distributed local shards; independent of the native interpreter entry point | One final combined run; no separate overlapping cluster suite | 262 passed, zero failures/errors/skips; 253.08s; cleanup completed |
 
-Record each exact command, source/configuration fingerprint, runtime versions,
-logs and result under `.artifacts/debug-logging/`. The existing scripts preserve
-Compose, image and cleanup evidence. Test-only bounded worker event captures
-are attached to JUnit properties; driver `caplog` is not used as worker proof.
-Only the exact test-owned Compose project and runtime image may be cleaned up.
-
-The cluster's eight logging cases retained bounded worker records, including
-two distinct worker IDs for the two-task shard case and independent execution
-budgets for the single grouped task. The runtime-relevant 40-file fingerprint
-matches the final worktree: `5a87c8ec92cb807fb8a0112831c982dfa603c5f318904c9ddd47ddd2da405587`.
-The final full-run input fingerprint was `f99b18eb0ea10360517d7a2d2b43483572b399f9f0111c62bfeb310d48f197f8`;
-later additions are two fast unit assertions plus documentation/evidence only.
-The existing local contract and successful local stream evidence are unaffected
-by the diagnostic-handler isolation correction; its failure path passed direct
-regression units and the final real restricted-query-log cluster cases.
-
-Both sync and async INSERT cases found real server INSERT rows but did not find
-the local `client_insert_id` among the server query IDs. The existing
-`transport_settings` path is unchanged. This is recorded as an existing protocol
-boundary, not silently repaired or advertised as verified server correlation.
-
-Cleanup readback confirms no container, network, volume or runtime tag remains
-for `ray-clickhouse-distributed-it-primary-81272`. Normalized repository/tag/image-ID
-sets for dangling images are unchanged; the raw list only changed ordering.
-No unrelated project resource or global cache was cleaned up. See
-`.artifacts/debug-logging/cleanup-verification.json` and `runtime-equivalence.json`.
-
-Ruff format/lint, strict mypy, documentation checks/spelling/Sphinx, the executable
-logging setup example, wheel/sdist build and Twine checks passed. The full static
-audit and exact cumulative diff are saved under `.artifacts/debug-logging/`.
-
-## Debug logging review corrections
-
-The user authorized the confirmed review repairs on 2026-10-23. Correct the
-local-shard parent's physical split claim, expected fallback severity/reasons,
-stream exit failure classification and later-block validation fields. Keep
-native context-manager behavior, error priority, SQL, retries and insert
-confirmation unchanged. A cleanup phase alone during concurrent write/cleanup
-failure is not a separate defect and is outside the repair scope.
-
-| Suite | Scope / code state | Reason and overlap | Result |
-| --- | --- | --- | --- |
-| Red regression proof | Eleven new unit cases against the pre-repair implementation | Prove the four confirmed findings before correction; not passing evidence | 11 failed, 35 deselected; `review-fix/regression-before.log` |
-| Final short validation | All non-Ray unit/contract cases, including 52 logging cases and six native-context equivalence cases | Changed production paths need fresh short coverage; no runtime startup | 965 passed, zero failures/errors/skips, 2.748s; `review-fix/short.xml`; all static/documentation/package checks passed |
-| New targeted cluster regressions | Six new cases: partition/range/auto child plans, expected safe fallback, later-block validation and real stream exit with injected cleanup fault | First execution of these new cases on the repaired code; no repeat of the prior 269-case full suite, no additional version baseline | 6 passed, 55 deselected, zero failures/errors/skips, 9.005s; `review-fix/cluster/pytest.xml` |
-
-The cluster scope was collected before execution: exactly six tests, with 55
-unrelated cases deselected. Use the existing pinned ClickHouse 26.8.1.2041 and
-Ray 2.59.0 Python 3.12 runtime. The earlier 269-case result remains historical
-coverage for unchanged behavior; it is not a full-suite result for this repair.
-Record source/configuration fingerprints, actual worker events, XML, logs and
-exact owned-resource cleanup in `review-fix/cluster`. The runner unsets all proxy
-variables for Docker, builds its unique runtime once, uses Compose `--no-build`
-and removes only its owned resources. Do not repeat the complete suite.
-
-Executed once with the planned target/selection and `-o junit_family=legacy`.
-Actual runtime: Linux Python 3.12.14, Ray 2.59.0, PyArrow 19.0.1,
-clickhouse-connect 1.5.0, pytest 9.1.1; one existing pytz deprecation warning.
-The runner's pre-run source-state fingerprint (including the planned Markdown
-ledger) is `9a437ddafe50ed2a384302a93b2138ac54472e367c8bf15f33238de974aed5ff`.
-Runtime file hashes, actual JUnit event summaries and versions are retained.
-Each physical split case captured four successful worker streams and two child
-plans, with no parent split claim; the other cases retain safe classifications.
-The injected real stream exit executed one native exit and one primary client
-close; the write failure left exactly the three confirmed rows in ClickHouse.
-
-Label-specific readback confirms no owned container, network, volume or runtime
-image remains for `ray-clickhouse-distributed-it-primary-95336`. Normalized
-dangling image identities are unchanged. No shared resources or cache were
-removed. Repair artifacts include the final cumulative diff, requirement map
-and static audit. The earlier full-suite result is retained separately; no new
-full-suite or Ray compatibility run is claimed. Commit, push and PR did not run.
-
-## PR 26 single-node worker import correction
-
-The user authorized the confirmed CI repair on 2026-10-24. On head `b6d1f50`,
-the single-node ClickHouse job reported 8 failed and 142 passed tests. Each
-failure was a Ray worker import error for the new `log_capture` helper, before
-its logging assertion ran. Pytest's configured `pythonpath` affects the driver;
-the plain single-node runner did not export the test directory to worker
-processes. Explicit local `PYTHONPATH=src:tests` masked this entry-point gap.
-
-Export the checkout's source/test paths at the existing pytest launch boundary,
-preserve caller-supplied paths, and verify unset, empty and custom `PYTHONPATH`
-with fresh child interpreters through the actual shell entry point. Docker is
-stubbed only in the fast script test; the real suite below uses the existing
-fixed ClickHouse image, real clients and local Ray workers.
-
-| Suite | Coverage / state | Reason and overlap | Result |
-| --- | --- | --- | --- |
-| Entry-point regression proof | Three fresh-interpreter cases with unset/empty/custom caller paths; actual script with a Docker stub | Prove the path propagation defect before the script correction; no infrastructure | All three failed with `ModuleNotFoundError: log_capture`; `pr26-import-fix/regression-before.log` |
-| Corrected short/static validation | Non-Ray units/contracts, Ruff, strict mypy and shell syntax | New script-environment behavior needs direct regression coverage; connector source is unchanged | 968 passed, zero failures/errors/skips; `pr26-import-fix/short.xml`; static checks passed |
-| Single-node validation attempt | Intended complete integration selection, cleared caller `PYTHONPATH` | The invocation mistakenly supplied `-o junit_family=legacy` without an explicit `tests/integration` target, so the script forwarded only flags and pytest collected unrelated directories | Collection error due to duplicate test module names; no intended integration cases executed; not passing evidence; `pr26-import-fix/single-node` |
-
-Record the exact invocation, changed-input hashes, versions, pytest XML/logs and
-owned resource cleanup. Keep the primary 26.8/23.3 and Ray compatibility CI
-successes as separate evidence. The 24.8 cluster job failed pulling Keeper from
-the mirror before pytest started; it is an infrastructure failure, not a reason
-to alter connector code or silently repeat unrelated suites. Commit, push,
-remote reruns and merge are not part of this repair execution.
-
-The implementation is frozen at two added shell lines plus three direct
-entry-point regressions. Native validation uses the existing Python 3.12.12,
-Ray 2.58.0, PyArrow 19.0.1 and clickhouse-connect 1.5.0 environment. The short
-regressions prove child-process imports and caller-path preservation without
-Docker or Ray startup. The failed infrastructure attempt exited during
-collection; its error does not establish the real-worker result.
-
-Cleanup readback found no owned container, network or volume for
-`ray-clickhouse-it`; normalized dangling-image identities are unchanged.
-The corrected full command must explicitly select `tests/integration` before
-`-o junit_family=legacy`, retain a cleared caller `PYTHONPATH`, and use a new
-artifact directory `pr26-import-fix/single-node-final`. Additional infrastructure
-execution awaits renewed user approval under the long-test execution agreement.
-No workaround suite, remote rerun or repeat of passing cluster jobs was run.
-
-The user subsequently explicitly approved one additional full single-node run.
-The corrected invocation selects `tests/integration` and uses
-`pr26-import-fix/single-node-final`, with caller `PYTHONPATH` unset. Production
-code, runner code, tests and runtime are unchanged from the passing short
-validation; only evidence records changed. This is the sole approved additional
-infrastructure run, with no preceding targeted IT and no cluster rerun.
-Result: 150 passed, 3 cluster cases deselected, zero failures/errors/skips,
-50.385 seconds; all eight logging cases passed and retained bounded worker
-events in JUnit properties. Eighteen existing warnings remain visible. Evidence:
-`pr26-import-fix/single-node-final/pytest.xml` and `result-summary.json`.
-
-Frozen runner/test/config hashes match the execution plan. Post-run readback
-confirms no owned container, network or volume remains; normalized dangling-image
-identities are unchanged. No further IT or remote job rerun was performed.
-The single-node import correction and local validation are complete. Remote CI
-still refers to the published head; these uncommitted changes have not been
-published. The 24.8 mirror timeout and Greptile credit shortage remain separate
-external conditions.
+Source/config fingerprints and command logs are retained in
+`.artifacts/debug-logging/ray-native-simplification/`. Prior framework runs are
+historical evidence and do not validate this implementation. Any additional
+long-running run requires separate approval and a recorded reason.
+The native run used only the checkout's absolute `src` in `PYTHONPATH`, without
+adding `tests` for workers. Docker dangling image identities were unchanged.
+Runtime/config fingerprints remained unchanged during validation. Both exact
+Compose projects and the owned cluster runtime image were removed. Native Ray
+was 2.58.0/Python 3.12.12; container Ray was 2.59.0/Python 3.12.14; both used the
+existing pinned ClickHouse 26.8 fixture. Static review found no actionable issue.
+The cumulative test addition ratio is 145 / (152 + 145) = 48.8%; no exception
+was required. Ruff, mypy, compatibility/docs checks, spelling and Sphinx passed.
