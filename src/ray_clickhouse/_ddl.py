@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -20,6 +22,8 @@ from ray_clickhouse._models import (
     ResourceLimits,
     validate_identifier,
 )
+
+logger = logging.getLogger(__name__)
 
 _CREATE_ENGINES = frozenset(
     {
@@ -181,8 +185,11 @@ def create_or_replace_table(
     )
     client: Any | None = None
     drop_started = False
+    started = time.monotonic()
+    logger.debug("ClickHouse table management starting mode=%s", mode)
     try:
         client = _open(connection, limits)
+        logger.debug("ClickHouse table existence check starting")
         settings, transport_settings = _query_context(
             connection, limits, f"{mode}-table-exists"
         )
@@ -198,6 +205,7 @@ def create_or_replace_table(
             raise ConfigurationError(f"ClickHouse table {table} already exists")
         if mode == "overwrite" and exists:
             drop_started = True
+            logger.debug("ClickHouse table drop starting")
             settings, transport_settings = _query_context(
                 connection, limits, "overwrite-drop"
             )
@@ -206,14 +214,17 @@ def create_or_replace_table(
                 settings=settings,
                 transport_settings=transport_settings,
             )
+            logger.debug("ClickHouse table drop confirmed")
         settings, transport_settings = _query_context(
             connection, limits, f"{mode}-table-create"
         )
+        logger.debug("ClickHouse table create starting")
         client.command(
             ddl,
             settings=settings,
             transport_settings=transport_settings,
         )
+        logger.debug("ClickHouse table create confirmed")
     except AmbiguousTableManagementError:
         raise
     except RayClickHouseError:
@@ -233,8 +244,15 @@ def create_or_replace_table(
             ) from None
         raise _translate(exc, operation=f"{mode} table") from None
     finally:
+        logger.debug(
+            "ClickHouse table management stopped mode=%s drop_attempted=%s "
+            "elapsed_ms=%.1f",
+            mode,
+            drop_started,
+            (time.monotonic() - started) * 1000,
+        )
         if client is not None:
             try:
                 client.close()
             except Exception:
-                pass
+                logger.warning("ClickHouse table management client close failed")

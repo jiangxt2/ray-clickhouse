@@ -96,7 +96,8 @@ def test_overwrite_validates_before_drop() -> None:
     open_client.assert_not_called()
 
 
-def test_overwrite_drop_then_create_failure_is_ambiguous() -> None:
+def test_overwrite_drop_then_create_failure_is_ambiguous(caplog) -> None:
+    caplog.set_level("DEBUG", logger="ray_clickhouse")
     client = MagicMock()
     client.query.return_value.result_rows = [(1,)]
     client.command.side_effect = [None, RuntimeError("connection reset")]
@@ -113,3 +114,8 @@ def test_overwrite_drop_then_create_failure_is_ambiguous() -> None:
                 engine="MergeTree",
                 order_by=("id",),
             )
+    assert "table drop confirmed" in caplog.text
+    assert "table create starting" in caplog.text
+    assert "table create confirmed" not in caplog.text
+    assert "drop_attempted=True" in caplog.text
+    assert "connection reset" not in caplog.text

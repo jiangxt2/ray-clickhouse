@@ -130,6 +130,56 @@ def _insert(client: Any, table: str, values: pa.Table) -> None:
     client.insert_arrow(table, values, database=DATABASE)
 
 
+@pytest.mark.integration
+@pytest.mark.ray
+def test_read_debug_logs_in_real_worker(
+    clickhouse_client, table_name, connection_options
+):
+    from ray_clickhouse.datasource import ClickHouseDatasource, ClickHouseReadConfig
+
+    clickhouse_client.command(
+        f"CREATE TABLE `{DATABASE}`.`{table_name}` (id UInt64) "
+        "ENGINE = MergeTree ORDER BY id"
+    )
+    clickhouse_client.insert_arrow(
+        table_name, pa.table({"id": [1, 2, 3]}), database=DATABASE
+    )
+    task = ClickHouseDatasource(
+        ClickHouseReadConfig(
+            ClickHouseConnection(**connection_options),
+            QualifiedTable(DATABASE, table_name),
+        )
+    ).get_read_tasks(1)[0]
+
+    @ray.remote
+    def read_with_logs(read_task):
+        import io
+        import logging
+        import os
+
+        output = io.StringIO()
+        handler = logging.StreamHandler(output)
+        logger = logging.getLogger("ray_clickhouse._transport")
+        previous_level = logger.level
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        try:
+            rows = sum(block.num_rows for block in read_task())
+            return rows, output.getvalue(), os.getpid()
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(previous_level)
+
+    rows, logs, worker_pid = ray.get(read_with_logs.remote(task))
+    assert worker_pid != os.getpid()
+    assert rows == 3
+    assert logs.count("ClickHouse first block") == 1
+    assert "query_id=ray-clickhouse-read-" in logs
+    assert "rows=3 arrow_bytes=24" in logs
+    assert "elapsed_ms=" in logs
+    assert "SELECT" not in logs
+
+
 def _create_view(client: Any, view: str, source: str) -> None:
     client.command(
         f"CREATE VIEW `{DATABASE}`.`{view}` AS "

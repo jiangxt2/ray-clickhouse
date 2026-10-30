@@ -341,6 +341,9 @@ def stream_query(
     client: Any | None = None
     failure: BaseException | None = None
     query_id = _new_query_id(query.operation)
+    started = time.monotonic()
+    total_rows = total_bytes = total_blocks = 0
+    logger.debug("ClickHouse read starting query_id=%s", query_id)
     log_comment = f"ray-clickhouse operation={query.operation} query_id={query_id}"
     query_started = False
     operation = "read client initialization"
@@ -366,6 +369,7 @@ def stream_query(
         settings["log_comment"] = log_comment
         query_started = True
         operation = "Arrow stream setup"
+        logger.debug("ClickHouse stream setup query_id=%s", query_id)
         with client.query_arrow_stream(
             query.sql,
             parameters=query.parameter_dict(),
@@ -392,16 +396,31 @@ def stream_query(
                             "query result contains NULL in a non-nullable field"
                         )
                 canonical = _validate_table(batch, query.arrow_schema)
-                yield from iter_batch_slices(
+                for block in iter_batch_slices(
                     canonical,
                     max_rows=limits.batch_rows,
                     max_bytes=limits.batch_bytes,
-                )
+                ):
+                    if total_blocks == 0:
+                        logger.debug(
+                            "ClickHouse first block query_id=%s elapsed_ms=%.1f",
+                            query_id,
+                            (time.monotonic() - started) * 1000,
+                        )
+                    total_rows += block.num_rows
+                    total_bytes += block.nbytes
+                    total_blocks += 1
+                    yield block
                 operation = "Arrow stream iteration"
     except (KeyboardInterrupt, SystemExit, GeneratorExit) as exc:
         failure = exc
         raise
     except RayClickHouseError as exc:
+        logger.error(
+            "ClickHouse read failed query_id=%s error_type=%s",
+            query_id,
+            type(exc).__name__,
+        )
         failure = _annotate_read_error(
             exc,
             connection=connection,
@@ -417,6 +436,11 @@ def stream_query(
         raise failure from None
     except BaseException as exc:
         translated = _translate(exc, operation="Arrow query")
+        logger.error(
+            "ClickHouse read failed query_id=%s error_type=%s",
+            query_id,
+            type(translated).__name__,
+        )
         failure = _annotate_read_error(
             translated,
             connection=connection,
@@ -431,10 +455,22 @@ def stream_query(
         )
         raise failure from None
     finally:
+        logger.debug(
+            "ClickHouse read stream stopped query_id=%s blocks=%d rows=%d "
+            "arrow_bytes=%d elapsed_ms=%.1f",
+            query_id,
+            total_blocks,
+            total_rows,
+            total_bytes,
+            (time.monotonic() - started) * 1000,
+        )
         if client is not None:
             try:
                 client.close()
             except Exception as exc:
+                logger.warning(
+                    "ClickHouse read client close failed query_id=%s", query_id
+                )
                 if failure is None:
                     error = TransportError("failed to close ClickHouse read client")
                     error.attach_diagnostic(
@@ -502,6 +538,14 @@ class ClickHouseInsertSession:
             raise
         except BaseException as exc:
             translated = _translate(exc, operation="Arrow insert")
+            logger.error(
+                "ClickHouse insert failed client_insert_id=%s insert_mode=%s "
+                "error_type=%s outcome=%s",
+                query_id,
+                self._insert_mode,
+                type(translated).__name__,
+                "unknown" if isinstance(translated, TransportError) else "rejected",
+            )
             if isinstance(translated, TransportError):
                 raise AmbiguousWriteError(
                     "ClickHouse insert outcome is unknown after a transport failure"

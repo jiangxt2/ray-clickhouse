@@ -120,7 +120,8 @@ def test_query_api_snapshots_values_and_forwards_resources():
     }
 
 
-def test_query_planning_is_cached_and_always_builds_one_task():
+def test_query_planning_is_cached_and_always_builds_one_task(caplog):
+    caplog.set_level("DEBUG", logger="ray_clickhouse")
     schema = pa.schema([pa.field("id", pa.uint64(), nullable=False)])
     plan = SchemaPlan(schema, (TargetColumn("id", "UInt64", "", "", 1),))
     source = ClickHouseQueryDatasource(
@@ -142,6 +143,10 @@ def test_query_planning_is_cached_and_always_builds_one_task():
     assert stream.call_count == 2
     assert stream.call_args.args[1].strict_schema is True
     assert source.arrow_schema == schema
+    assert caplog.text.count("query schema discovery starting") == 1
+    assert "query schema cache hit" in caplog.text
+    assert caplog.text.count("query read plan tasks=1") == 2
+    assert "SELECT" not in caplog.text
 
 
 @pytest.mark.parametrize(

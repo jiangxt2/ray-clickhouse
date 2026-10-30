@@ -245,6 +245,11 @@ write_clickhouse(
 )
 ```
 
+The connector uses standard `ray_clickhouse.*` loggers. Enable `DEBUG` with
+Ray's public `ray.LoggingConfig` to see planning, first-block latency, and read/write
+summaries in driver and worker logs. See [debug logging](doc/source/troubleshooting.md#debug-logging)
+for setup and field meanings. The connector does not install handlers or change Ray settings.
+
 When diagnosing an Arrow or transport failure, set `diagnostic_flush_logs=True` on
 `read_clickhouse()` if the ClickHouse account may run `SYSTEM FLUSH LOGS`:
 

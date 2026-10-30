@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import re
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
@@ -18,6 +20,8 @@ from ray_clickhouse._models import ClickHouseConnection, QuerySpec, ResourceLimi
 from ray_clickhouse._schema import SchemaPlan, render_read_projection
 from ray_clickhouse._sql import validate_filter_parameters
 from ray_clickhouse._transport import stream_query
+
+logger = logging.getLogger(__name__)
 
 _FORBIDDEN_CONTROL = re.compile(
     r"(?<![\w.])(?:INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|RENAME|TRUNCATE|"
@@ -156,12 +160,21 @@ class ClickHouseQueryDatasource(Datasource):
 
     def _schema(self) -> SchemaPlan:
         if self._schema_plan is None:
+            started = time.monotonic()
+            logger.debug("ClickHouse query schema discovery starting")
             self._schema_plan = discover_query_schema(
                 self._config.connection,
                 self._config.query_sql,
                 self._config.limits,
                 parameters=dict(self._config.query_parameters),
             )
+            logger.debug(
+                "ClickHouse query schema discovered columns=%d elapsed_ms=%.1f",
+                len(self._schema_plan.columns),
+                (time.monotonic() - started) * 1000,
+            )
+        else:
+            logger.debug("ClickHouse query schema cache hit")
         return self._schema_plan
 
     @property
@@ -195,6 +208,7 @@ class ClickHouseQueryDatasource(Datasource):
                 diagnostic_flush_logs=config.diagnostic_flush_logs,
             )
 
+        logger.debug("ClickHouse query read plan tasks=1")
         return [
             make_read_task(
                 read_fn,

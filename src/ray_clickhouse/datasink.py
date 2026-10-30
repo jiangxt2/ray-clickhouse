@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -28,6 +30,8 @@ from ray_clickhouse._schema import (
 )
 from ray_clickhouse._sql import normalize_columns
 from ray_clickhouse._transport import ClickHouseInsertSession, iter_batch_slices
+
+logger = logging.getLogger(__name__)
 
 
 class ClickHouseDataSink(Datasink[dict[str, object]]):
@@ -84,6 +88,8 @@ class ClickHouseDataSink(Datasink[dict[str, object]]):
         return "ClickHouseWrite"
 
     def on_write_start(self, schema: pa.Schema | None = None) -> None:
+        started = time.monotonic()
+        logger.debug("ClickHouse write preparation starting mode=%s", self._write_mode)
         if self._write_mode in {"create", "overwrite"}:
             if schema is None:
                 raise ConfigurationError(
@@ -100,12 +106,17 @@ class ClickHouseDataSink(Datasink[dict[str, object]]):
                 order_by=self._order_by,
                 nullable_columns=self._nullable_columns,
             )
+        logger.debug("ClickHouse write target discovery starting")
         self._target = discover_target(self._connection, self._table, self._limits)
         self._source_schema = schema
         if schema is not None:
             self._source_columns = validate_source_schema(
                 schema, self._target, self._columns
             )
+        logger.debug(
+            "ClickHouse write preparation ready elapsed_ms=%.1f",
+            (time.monotonic() - started) * 1000,
+        )
 
     def write(self, blocks: Iterable[Any], ctx: Any) -> dict[str, object]:
         del ctx
@@ -124,6 +135,8 @@ class ClickHouseDataSink(Datasink[dict[str, object]]):
         total_bytes = 0
         total_batches = 0
         failure: BaseException | None = None
+        started = time.monotonic()
+        logger.debug("ClickHouse write task starting insert_mode=%s", self._insert_mode)
         try:
             session.start()
             for block in blocks:
@@ -161,11 +174,23 @@ class ClickHouseDataSink(Datasink[dict[str, object]]):
             }
         except BaseException as exc:
             failure = exc
+            logger.error(
+                "ClickHouse write task failed error_type=%s", type(exc).__name__
+            )
             raise
         finally:
+            logger.debug(
+                "ClickHouse write task stopped confirmed_batches=%d confirmed_rows=%d "
+                "confirmed_arrow_bytes=%d elapsed_ms=%.1f",
+                total_batches,
+                total_rows,
+                total_bytes,
+                (time.monotonic() - started) * 1000,
+            )
             try:
                 session.close()
             except Exception:
+                logger.warning("ClickHouse write session close failed")
                 if failure is None:
                     raise
 
@@ -181,9 +206,17 @@ class ClickHouseDataSink(Datasink[dict[str, object]]):
             int(item.get("batches", 0)) for item in returns if isinstance(item, Mapping)
         )
         self._receipt = WriteReceipt(rows, bytes_written, batches)
+        logger.info(
+            "ClickHouse write complete confirmed_batches=%d confirmed_rows=%d "
+            "confirmed_arrow_bytes=%d",
+            batches,
+            rows,
+            bytes_written,
+        )
 
     def on_write_failed(self, error: Exception) -> None:
         self._receipt = None
+        logger.error("ClickHouse write failed error_type=%s", type(error).__name__)
 
 
 def validate_write_remote_args(

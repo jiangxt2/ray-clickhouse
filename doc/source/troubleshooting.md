@@ -39,6 +39,44 @@ the client-side named form; quoted/commented placeholder-looking text with
 active bindings is rejected. Metadata discovery adds two requests and is not a
 snapshot or a guarantee of zero scan work.
 
+## Debug logging
+
+Configure logging when the application initializes Ray:
+
+```python
+import ray
+
+ray.init(
+    logging_config=ray.LoggingConfig(
+        encoding="TEXT", log_level="DEBUG", additional_log_standard_attrs=["name"]
+    )
+)
+```
+
+Ray configures the root logger in the driver and workers and adds its job, task,
+worker and node context. Use `encoding="JSON"` for structured output. This sets
+the job's root log level; applications can also use standard Python logging
+configuration for more selective filtering. The connector uses module loggers
+under `ray_clickhouse` and does not install handlers or initialize Ray.
+
+Debug messages show discovery and cache reuse, actual split plans, stream setup,
+first-block latency, write preparation, and DDL stages. Read messages reuse the
+existing `query_id`. `client_insert_id` in insert failure messages is a local
+identifier and is not a guaranteed server query-log lookup key.
+
+Read `blocks` and `rows` count yielded blocks and rows; write `confirmed_*` counts
+only batches acknowledged by ClickHouse. Byte counts are Arrow memory sizes,
+not network traffic. `elapsed_ms` is client wall-clock duration measured with a
+monotonic clock. A `stopped` message reports local progress, including partial
+consumption or failure; it does not assert successful cleanup or a completed
+Dataset. The driver logs a write completion summary only in the normal Ray
+completion callback, including zero counts for an empty write.
+
+There are no per-batch logs or additional connector logging switches. New log
+messages exclude SQL, parameter values, credentials, connection configuration,
+row values, full schemas, and raw exception messages. Changing the log level
+does not add queries or retries or enable `diagnostic_flush_logs`.
+
 ## Arrow stream failures and query diagnostics
 
 Inspect `error.client_diagnostic` for the underlying exception type, operation,

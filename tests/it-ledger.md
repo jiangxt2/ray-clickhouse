@@ -1043,3 +1043,29 @@ Greptile found no actionable issue on the initial head, with confidence 5/5.
 Its result and all CI outcomes must be rechecked against the new PR head before
 reporting completion. Failed setup logs and the uploaded Compose evidence are
 retained; setup failure is not reported as a failing predicate test.
+
+## Standard Ray logging
+
+The approved simplification uses module loggers and Ray's public logging
+configuration. It removes the custom event/context/sampling framework and its
+test-only worker import dependency. The existing read/insert/DDL calls, retries,
+receipts, and cleanup semantics remain the baseline for comparison.
+
+| Suite | Coverage and independent reason | Execution limit | Result |
+| --- | --- | --- | --- |
+| Unit and contract tests | Existing behavior plus concise log/count/safety assertions, including real Ray contracts | One complete run and a short correction of three new fixtures; no repeated Ray contracts | 938 distinct cases covered: 935 initially passed; after adding the missing required database to three new fixtures, all 11 cases in the two affected unit files passed |
+| `scripts/run_clickhouse_it.sh tests/integration` | Real ClickHouse protocol and native Python/Ray worker import path, including a worker log capture using only standard logging | One final complete single-node run | 143 passed, 3 cluster cases deselected, zero failures/errors/skips; 47.98s; cleanup completed |
+| `scripts/run_distributed_it.sh tests/integration tests/distributed` | Container Ray workers, ordinary reads/writes and distributed local shards; independent of the native interpreter entry point | One final combined run; no separate overlapping cluster suite | 262 passed, zero failures/errors/skips; 253.08s; cleanup completed |
+
+Source/config fingerprints and command logs are retained in
+`.artifacts/debug-logging/ray-native-simplification/`. Prior framework runs are
+historical evidence and do not validate this implementation. Any additional
+long-running run requires separate approval and a recorded reason.
+The native run used only the checkout's absolute `src` in `PYTHONPATH`, without
+adding `tests` for workers. Docker dangling image identities were unchanged.
+Runtime/config fingerprints remained unchanged during validation. Both exact
+Compose projects and the owned cluster runtime image were removed. Native Ray
+was 2.58.0/Python 3.12.12; container Ray was 2.59.0/Python 3.12.14; both used the
+existing pinned ClickHouse 26.8 fixture. Static review found no actionable issue.
+The cumulative test addition ratio is 145 / (152 + 145) = 48.8%; no exception
+was required. Ruff, mypy, compatibility/docs checks, spelling and Sphinx passed.

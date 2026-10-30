@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Iterator
 from copy import copy
 from dataclasses import dataclass, field, replace
@@ -246,12 +247,17 @@ class ClickHouseDatasource(Datasource):
 
     def _ensure_planning_snapshot(self) -> DiscoverySnapshot:
         if self._planning_snapshot is not None:
+            logger.debug("ClickHouse planning metadata cache hit")
             return self._planning_snapshot
         config = self._config
+        started = time.monotonic()
+        logger.debug("ClickHouse schema discovery starting")
         schema = self._predicate_schema or discover_schema(
             config.connection, config.table, config.limits, columns=config.columns
         )
+        logger.debug("ClickHouse engine discovery starting")
         engine = discover_engine(config.connection, config.table, config.limits)
+        logger.debug("ClickHouse schema discovered columns=%d", len(schema.columns))
         filter_sql, _, _ = effective_filter(
             config.filter_sql, dict(config.query_parameters), self._pushed_predicate
         )
@@ -262,6 +268,7 @@ class ClickHouseDatasource(Datasource):
             )
             if engine == "Distributed" and filter_sql and not config.order_by:
                 try:
+                    logger.debug("ClickHouse local shard discovery starting")
                     resolved = resolve_distributed(
                         config.connection,
                         config.table,
@@ -296,6 +303,7 @@ class ClickHouseDatasource(Datasource):
         range_facts: RangeFacts | None = None
         if config.split == "partition":
             try:
+                logger.debug("ClickHouse partition discovery starting")
                 partitions = discover_partitions(
                     config.connection, config.table, config.limits
                 )
@@ -304,6 +312,9 @@ class ClickHouseDatasource(Datasource):
             except DiscoveryError:
                 if config.discovery_policy == "error":
                     raise
+                logger.debug(
+                    "ClickHouse partition discovery unavailable; using single query"
+                )
         if config.split == "range":
             if config.range_column not in {column.name for column in schema.columns}:
                 raise ConfigurationError(
@@ -315,6 +326,7 @@ class ClickHouseDatasource(Datasource):
                 if column.name == config.range_column
             )
             try:
+                logger.debug("ClickHouse range discovery starting")
                 range_facts = discover_range_facts(
                     config.connection,
                     config.table,
@@ -329,8 +341,12 @@ class ClickHouseDatasource(Datasource):
             except DiscoveryError:
                 if config.discovery_policy == "error":
                     raise
+                logger.debug(
+                    "ClickHouse range discovery unavailable; using single query"
+                )
         if config.split == "auto":
             try:
+                logger.debug("ClickHouse automatic range discovery starting")
                 if engine not in LOCAL_MERGETREE_ENGINES:
                     raise DiscoveryError(
                         "automatic range splitting requires a direct MergeTree table"
@@ -351,11 +367,23 @@ class ClickHouseDatasource(Datasource):
             except DiscoveryError:
                 if config.discovery_policy == "error":
                     raise
+                logger.debug(
+                    "ClickHouse automatic range discovery unavailable; "
+                    "using single query"
+                )
         self._planning_snapshot = DiscoverySnapshot(
             schema=schema,
             engine=engine,
             partitions=partitions,
             range_facts=range_facts,
+        )
+        logger.debug(
+            "ClickHouse planning metadata ready engine=%s partitions=%d "
+            "range_available=%s elapsed_ms=%.1f",
+            engine,
+            len(partitions),
+            range_facts is not None,
+            (time.monotonic() - started) * 1000,
         )
         return self._planning_snapshot
 
@@ -560,6 +588,7 @@ class ClickHouseDatasource(Datasource):
                 for group in scan_groups
             ]
         if self._config.split == "single" or self._logical_fallback:
+            logger.debug("ClickHouse read plan split=single tasks=1")
             return [
                 self._make_task(columns=columns, per_task_row_limit=per_task_row_limit)
             ]
@@ -572,6 +601,11 @@ class ClickHouseDatasource(Datasource):
                 snapshot.partitions,
                 target_tasks=task_count,
                 max_tasks=self._config.max_tasks,
+            )
+            logger.debug(
+                "ClickHouse read plan split=%s tasks=%d",
+                "partition" if groups else "single",
+                len(groups) or 1,
             )
             return [
                 self._make_task(
@@ -590,6 +624,11 @@ class ClickHouseDatasource(Datasource):
                 target_tasks=task_count,
                 max_tasks=self._config.max_tasks,
             )
+            logger.debug(
+                "ClickHouse read plan split=%s tasks=%d",
+                "range" if ranges else "single",
+                len(ranges) or 1,
+            )
             tasks = []
             for lower, upper, include_null in ranges:
                 tasks.append(
@@ -605,6 +644,7 @@ class ClickHouseDatasource(Datasource):
                 self._make_task(columns=columns, per_task_row_limit=per_task_row_limit)
             ]
 
+        logger.debug("ClickHouse read plan split=single tasks=1")
         return [self._make_task(columns=columns, per_task_row_limit=per_task_row_limit)]
 
 
