@@ -1,3 +1,5 @@
+import pickle
+import traceback
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
@@ -97,14 +99,17 @@ def test_overwrite_validates_before_drop() -> None:
 
 
 def test_overwrite_drop_then_create_failure_is_ambiguous(caplog) -> None:
+    class ClientFailure(RuntimeError):
+        code = 123
+
     caplog.set_level("DEBUG", logger="ray_clickhouse")
     client = MagicMock()
     client.query.return_value.result_rows = [(1,)]
-    client.command.side_effect = [None, RuntimeError("connection reset")]
+    client.command.side_effect = [None, ClientFailure("connection reset secret-value")]
     connection = ClickHouseConnection(host="clickhouse", database="analytics")
 
     with patch("ray_clickhouse._ddl._open", return_value=client):
-        with pytest.raises(AmbiguousTableManagementError):
+        with pytest.raises(AmbiguousTableManagementError) as raised:
             create_or_replace_table(
                 connection,
                 QualifiedTable("analytics", "events"),
@@ -114,6 +119,21 @@ def test_overwrite_drop_then_create_failure_is_ambiguous(caplog) -> None:
                 engine="MergeTree",
                 order_by=("id",),
             )
+    error = raised.value
+    assert error.client_diagnostic == {
+        "exception_type": f"{ClientFailure.__module__}.{ClientFailure.__qualname__}",
+        "operation": "overwrite table",
+        "message": "client message omitted",
+        "exception_code": "123",
+    }
+    assert "client_exception_code=123" in str(error)
+    assert error.__cause__ is None
+    assert "secret-value" not in "".join(traceback.format_exception(error))
+    assert b"secret-value" not in pickle.dumps(error)
+    assert (
+        pickle.loads(pickle.dumps(error)).client_diagnostic == error.client_diagnostic
+    )
+    client.close.assert_called_once()
     assert "table drop confirmed" in caplog.text
     assert "table create starting" in caplog.text
     assert "table create confirmed" not in caplog.text

@@ -8,8 +8,6 @@ import pytest
 from ray_clickhouse._ddl import create_or_replace_table
 from ray_clickhouse._discovery import discover_engine
 from ray_clickhouse._errors import (
-    AmbiguousTableManagementError,
-    AmbiguousWriteError,
     DiscoveryError,
     ReadError,
     TransportError,
@@ -84,13 +82,6 @@ def test_discovery_initialization_exposes_safe_metadata():
             "insert", WriteError, "secret-value", "Arrow insert", id="rejected"
         ),
         pytest.param(
-            "insert",
-            AmbiguousWriteError,
-            "connection secret-value",
-            "Arrow insert",
-            id="ambiguous",
-        ),
-        pytest.param(
             "close", TransportError, "secret-value", "write client close", id="close"
         ),
     ],
@@ -124,27 +115,6 @@ def test_write_failures_expose_safe_metadata(phase, expected, message, operation
     if phase == "insert":
         client.insert_arrow.assert_called_once()
         session.close()
-
-
-def test_overwrite_failure_keeps_ambiguous_outcome_and_safe_metadata():
-    client = MagicMock()
-    client.query.return_value.result_rows = [(1,)]
-    client.command.side_effect = [None, ServerFailure("secret-value")]
-    with (
-        patch("ray_clickhouse._ddl._open", return_value=client),
-        pytest.raises(AmbiguousTableManagementError) as raised,
-    ):
-        create_or_replace_table(
-            ClickHouseConnection(host="host", database="db"),
-            QualifiedTable("db", "events"),
-            ResourceLimits(),
-            pa.schema([("id", pa.int64())]),
-            mode="overwrite",
-            engine="MergeTree",
-            order_by=("id",),
-        )
-    _assert_safe(raised.value, "overwrite table")
-    client.close.assert_called_once()
 
 
 def test_create_failure_keeps_discovery_class_and_safe_metadata():

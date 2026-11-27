@@ -272,10 +272,10 @@ to protect credentials. The diagnostic text is
 server-provided and may include query context, so do not put credentials in query
 predicates or parameters.
 
-Discovery, write, and table-management failures also expose a
-`client_diagnostic` when a client operation fails. It contains the exception
-type, operation, and an integer error code when available. Client messages are
-omitted in these paths because they may contain SQL, credentials, or row values.
+Handled client failures during discovery, writes, and table management also
+expose a `client_diagnostic` with the exception type, operation, and a numeric
+error code represented as a string when available. Client messages are omitted
+in these paths because they may contain SQL, credentials, or row values.
 Ambiguous write and table-management errors retain their existing meanings.
 
 `filter` is a trusted predicate fragment, not an arbitrary SQL query.

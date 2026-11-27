@@ -1,3 +1,5 @@
+import pickle
+import traceback
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
@@ -186,8 +188,11 @@ def test_stream_query_accepts_clickhouse_record_batches() -> None:
 
 
 def test_insert_transport_failure_is_ambiguous(caplog) -> None:
+    class ClientFailure(RuntimeError):
+        code = 123
+
     client = MagicMock()
-    client.insert_arrow.side_effect = RuntimeError("connection reset")
+    client.insert_arrow.side_effect = ClientFailure("connection reset secret-value")
     connection = ClickHouseConnection(host="clickhouse", database="analytics")
     table = pa.table({"id": pa.array([1], type=pa.uint64())})
     session = ClickHouseInsertSession(
@@ -200,9 +205,25 @@ def test_insert_transport_failure_is_ambiguous(caplog) -> None:
 
     with patch("clickhouse_connect.get_client", return_value=client):
         session.start()
-        with pytest.raises(AmbiguousWriteError):
+        with pytest.raises(AmbiguousWriteError) as raised:
             session.insert(table)
         session.close()
+    error = raised.value
+    assert error.client_diagnostic == {
+        "exception_type": f"{ClientFailure.__module__}.{ClientFailure.__qualname__}",
+        "operation": "Arrow insert",
+        "message": "client message omitted",
+        "exception_code": "123",
+    }
+    assert "client_exception_code=123" in str(error)
+    assert error.__cause__ is None
+    assert "secret-value" not in "".join(traceback.format_exception(error))
+    assert b"secret-value" not in pickle.dumps(error)
+    assert (
+        pickle.loads(pickle.dumps(error)).client_diagnostic == error.client_diagnostic
+    )
+    client.insert_arrow.assert_called_once()
+    client.close.assert_called_once()
     assert "client_insert_id=ray-clickhouse-insert-" in caplog.text
     assert "outcome=unknown" in caplog.text
     assert "connection reset" not in caplog.text

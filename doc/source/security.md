@@ -10,9 +10,10 @@ Read client diagnostics omit raw exception chains and SQL-bearing messages.
 They redact worker-local connection strings and parameter string values before
 attaching bounded text to the public error. Query-log details are separate
 server-provided context; avoid putting credentials in predicates or parameters.
-Discovery, write, and table-management client diagnostics omit client messages
-and raw exception chains, retaining only the exception type, operation, and a
-bounded integer error code when available.
+Diagnostics for handled discovery, write, and table-management client failures
+omit client messages and suppress raw exception chains in formatted tracebacks.
+They retain the exception type, operation, and, when available, a bounded numeric
+error code represented as a string.
 
 ## SQL boundary
 
