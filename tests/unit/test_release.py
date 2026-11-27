@@ -65,7 +65,9 @@ def _repository_texts() -> tuple[str, str, str, str]:
     return (
         (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
         (REPOSITORY_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"),
-        (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8"),
+        (REPOSITORY_ROOT / "pyproject.toml")
+        .read_text(encoding="utf-8")
+        .replace('version = "1.2"', f'version = "{RELEASE_VERSION}"', 1),
         (REPOSITORY_ROOT / f"release-notes/v{RELEASE_VERSION}.md").read_text(
             encoding="utf-8"
         ),
