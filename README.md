@@ -272,6 +272,12 @@ to protect credentials. The diagnostic text is
 server-provided and may include query context, so do not put credentials in query
 predicates or parameters.
 
+Discovery, write, and table-management failures also expose a
+`client_diagnostic` when a client operation fails. It contains the exception
+type, operation, and an integer error code when available. Client messages are
+omitted in these paths because they may contain SQL, credentials, or row values.
+Ambiguous write and table-management errors retain their existing meanings.
+
 `filter` is a trusted predicate fragment, not an arbitrary SQL query.
 Use `tenant_id = {tenant:Nullable(UInt32)}` with `query_parameters={"tenant": 42}`
 for native server-side binding. Existing `%(tenant)s` client binding remains

@@ -46,6 +46,32 @@ class RayClickHouseError(RuntimeError):
         self.args = (f"{self.args[0]} ({', '.join(details)})",)
 
 
+def _attach_client_failure(
+    error: RayClickHouseError, exc: BaseException, operation: str
+) -> RayClickHouseError:
+    """Attach bounded metadata without retaining arbitrary client error text."""
+    diagnostic = {
+        "exception_type": f"{type(exc).__module__}.{type(exc).__qualname__}",
+        "operation": operation,
+        "message": "client message omitted",
+    }
+    try:
+        code = getattr(exc, "code", None)
+    except Exception:
+        code = None
+    if type(code) is int and 0 <= code <= 999999:
+        diagnostic["exception_code"] = str(code)
+    error.client_diagnostic = diagnostic
+    details = [
+        f"client_exception_type={diagnostic['exception_type']}",
+        f"operation={operation}",
+    ]
+    if "exception_code" in diagnostic:
+        details.append(f"client_exception_code={diagnostic['exception_code']}")
+    error.args = (f"{error.args[0]} ({', '.join(details)})",)
+    return error
+
+
 class ConfigurationError(RayClickHouseError, ValueError):
     """The connector configuration is invalid."""
 

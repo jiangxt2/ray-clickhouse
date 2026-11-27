@@ -21,6 +21,7 @@ from ray_clickhouse._errors import (
     ReadError,
     TransportError,
     WriteError,
+    _attach_client_failure,
 )
 from ray_clickhouse._models import ClickHouseConnection, QuerySpec, ResourceLimits
 
@@ -512,7 +513,11 @@ class ClickHouseInsertSession:
         except BaseException as exc:
             if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
                 raise
-            raise _translate(exc, operation="write client initialization") from None
+            raise _attach_client_failure(
+                _translate(exc, operation="write client initialization"),
+                exc,
+                "write client initialization",
+            ) from None
 
     def insert(self, table: pa.Table) -> dict[str, object]:
         if self._client is None:
@@ -547,10 +552,10 @@ class ClickHouseInsertSession:
                 "unknown" if isinstance(translated, TransportError) else "rejected",
             )
             if isinstance(translated, TransportError):
-                raise AmbiguousWriteError(
+                translated = AmbiguousWriteError(
                     "ClickHouse insert outcome is unknown after a transport failure"
-                ) from None
-            raise translated from None
+                )
+            raise _attach_client_failure(translated, exc, "Arrow insert") from None
         return {"status": "confirmed", "query_id": query_id}
 
     def close(self) -> None:
@@ -560,5 +565,9 @@ class ClickHouseInsertSession:
             return
         try:
             client.close()
-        except Exception:
-            raise TransportError("failed to close ClickHouse write client") from None
+        except Exception as exc:
+            raise _attach_client_failure(
+                TransportError("failed to close ClickHouse write client"),
+                exc,
+                "write client close",
+            ) from None
