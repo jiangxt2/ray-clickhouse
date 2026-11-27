@@ -4,7 +4,7 @@ Ray Data read and append connector for ClickHouse physical tables.
 
 > [!IMPORTANT]
 > `ray-clickhouse` is community-maintained and is not an official Ray or ClickHouse project.
-> This source builds package version `1.1`. Formal releases follow the two-component
+> This source builds package version `1.2`. Formal releases follow the two-component
 > `major.minor` route, and each published release is tied to its own immutable candidate.
 
 This release provides:
@@ -59,7 +59,7 @@ classes are internal and are not independent compatibility promises.
 - [Troubleshooting](doc/source/troubleshooting.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
-- [Release notes](release-notes/v1.1.md)
+- [Release notes](release-notes/v1.2.md)
 
 ## Native Dataset predicate filtering
 
