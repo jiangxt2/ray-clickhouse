@@ -18,6 +18,10 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  RAY_CLICKHOUSE_IT_IMAGE: docker.io/clickhouse/clickhouse-server@sha256:9f8fa0d51f86611fda226c4085cdafdddce35312a60c934de2e4450d61fcb99a
+  RAY_CLICKHOUSE_RAY_BASE_SOURCE: docker.io/rayproject/ray@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5
+
 jobs:
   candidate:
     name: Resolve candidate commit
@@ -205,13 +209,13 @@ jobs:
       matrix:
         include:
           - clickhouse: '26.8.1.2041'
-            image: docker.m.daocloud.io/clickhouse/clickhouse-server@sha256:9f8fa0d51f86611fda226c4085cdafdddce35312a60c934de2e4450d61fcb99a
+            image: docker.io/clickhouse/clickhouse-server@sha256:9f8fa0d51f86611fda226c4085cdafdddce35312a60c934de2e4450d61fcb99a
             artifact: ray-2.59-cluster-integration
           - clickhouse: '24.8.14.39'
-            image: docker.m.daocloud.io/clickhouse/clickhouse-server:24.8.14.39
+            image: docker.io/clickhouse/clickhouse-server:24.8.14.39
             artifact: ray-2.59-cluster-integration-ch24.8
           - clickhouse: '23.3.22.3'
-            image: docker.m.daocloud.io/clickhouse/clickhouse-server:23.3.22.3
+            image: docker.io/clickhouse/clickhouse-server:23.3.22.3
             artifact: ray-2.59-cluster-integration-ch23.3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -252,7 +256,7 @@ jobs:
         env:
           RAY_CLICKHOUSE_IT_BASELINE: predicate-ray258
           RAY_CLICKHOUSE_CLUSTER_PYTEST_MARKER: integration
-          RAY_CLICKHOUSE_RAY_BASE_SOURCE: docker.m.daocloud.io/rayproject/ray@sha256:c3c9573c5c6bfe4127885f79622d6a32064d34cafc7d156ec728aab8657be250
+          RAY_CLICKHOUSE_RAY_BASE_SOURCE: docker.io/rayproject/ray@sha256:c3c9573c5c6bfe4127885f79622d6a32064d34cafc7d156ec728aab8657be250
           RAY_CLICKHOUSE_RAY_BASE_LOCAL_IMAGE: ray-clickhouse-ray-base:2.58.0-py312-c3c9573c5c6b
           RAY_CLICKHOUSE_CLUSTER_IT_ARTIFACT_DIR: artifacts/it/predicate-ray258
       - name: Upload predicate compatibility evidence
