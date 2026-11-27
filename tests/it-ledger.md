@@ -1069,3 +1069,15 @@ was 2.58.0/Python 3.12.12; container Ray was 2.59.0/Python 3.12.14; both used th
 existing pinned ClickHouse 26.8 fixture. Static review found no actionable issue.
 The cumulative test addition ratio is 145 / (152 + 145) = 48.8%; no exception
 was required. Ruff, mypy, compatibility/docs checks, spelling and Sphinx passed.
+
+## Exception diagnostics
+
+| Suite | Coverage / code state | Result |
+| --- | --- | --- |
+| Targeted unit and contract tests | Exception metadata, security, discovery, writes, DDL, existing read diagnostics, distributed planning and public facade; worktree based on `ec599e3` | 222 passed; `.artifacts/exception-diagnostics/unit.log` |
+| Single-node ClickHouse integration | Complete non-cluster integration suite, including real permission and rejected-insert failures; same implementation | 144 passed, 3 cluster cases deselected, 49.65 seconds; `.artifacts/exception-diagnostics/clickhouse-it-retry/pytest.log` |
+
+The first launch stopped before pytest because Docker automatic address pools
+were exhausted. The approved retry used an isolated temporary subnet and the
+cached digest-pinned image with pulling disabled. The script removed its own
+container and network. Ruff, mypy and documentation checks passed.

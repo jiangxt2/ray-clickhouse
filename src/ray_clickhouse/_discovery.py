@@ -21,6 +21,7 @@ from ray_clickhouse._errors import (
     RayClickHouseError,
     SchemaError,
     TransportError,
+    _attach_client_failure,
 )
 from ray_clickhouse._models import (
     ClickHouseConnection,
@@ -312,26 +313,34 @@ def _driver() -> Any:
 
 def _translate(exc: BaseException, *, operation: str) -> RayClickHouseError:
     code = getattr(exc, "code", None)
-    message = str(exc).lower()
+    try:
+        message = str(exc).lower()
+    except Exception:
+        message = ""
+    error: RayClickHouseError
     if code in {516, 193} or "authentication" in message:
-        return AuthenticationError(
+        error = AuthenticationError(
             f"ClickHouse authentication failed during {operation}"
         )
-    if (
+    elif (
         code in {497, 551}
         or "not enough privileges" in message
         or "access denied" in message
     ):
-        return PermissionError(f"ClickHouse permission check failed during {operation}")
-    if code in {60, 81} or "unknown table" in message or "doesn't exist" in message:
-        return ObjectNotFoundError(
+        error = PermissionError(
+            f"ClickHouse permission check failed during {operation}"
+        )
+    elif code in {60, 81} or "unknown table" in message or "doesn't exist" in message:
+        error = ObjectNotFoundError(
             f"ClickHouse object was not found during {operation}"
         )
-    if "timeout" in message or "connection" in message or "http" in message:
-        return TransportError(f"ClickHouse transport failed during {operation}")
-    if operation == "schema discovery":
-        return SchemaError("ClickHouse schema discovery failed")
-    return DiscoveryError(f"ClickHouse {operation} failed")
+    elif "timeout" in message or "connection" in message or "http" in message:
+        error = TransportError(f"ClickHouse transport failed during {operation}")
+    elif operation == "schema discovery":
+        error = SchemaError("ClickHouse schema discovery failed")
+    else:
+        error = DiscoveryError(f"ClickHouse {operation} failed")
+    return _attach_client_failure(error, exc, operation)
 
 
 def _open(connection: ClickHouseConnection, limits: ResourceLimits) -> Any:

@@ -85,6 +85,12 @@ and survives worker error serialization. Raw exception chains remain suppressed
 to protect credentials; SQL-bearing client messages are omitted. Query-log
 details are optional server-provided context.
 
+Handled discovery, write, and table-management client failures provide the
+exception type, operation, and, when available, a numeric error code represented
+as a string in `client_diagnostic`. Their client messages are omitted because
+they may contain SQL, credentials, or row values. An `AmbiguousWriteError` or
+`AmbiguousTableManagementError` still indicates an unconfirmed outcome.
+
 An Arrow read failure can be reported as `ArrowInvalid`, `IncompleteRead`, or a transport error when ClickHouse fails after an Arrow response has started. Read failures carry the generated query id when available and perform a bounded, best-effort lookup in `system.query_log`. Set `diagnostic_flush_logs=True` on `read_clickhouse()` when the account is allowed to run `SYSTEM FLUSH LOGS` and immediate query-log visibility is required. The diagnostic lookup never replaces the original read exception and may be unavailable when query logging is delayed or permission is missing.
 
 The connector first discovers the available system query-log table with

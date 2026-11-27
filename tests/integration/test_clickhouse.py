@@ -16,6 +16,7 @@ from ray_clickhouse._errors import (
     AmbiguousWriteError,
     DiscoveryError,
     PermissionError,
+    RayClickHouseError,
     ReadError,
     SchemaError,
     TransportError,
@@ -27,7 +28,11 @@ from ray_clickhouse._models import (
     QuerySpec,
     ResourceLimits,
 )
-from ray_clickhouse._transport import _discover_query_log_table, stream_query
+from ray_clickhouse._transport import (
+    ClickHouseInsertSession,
+    _discover_query_log_table,
+    stream_query,
+)
 
 from .conftest import DATABASE
 
@@ -645,6 +650,40 @@ def test_write_rejects_arrow_type_mismatch(
 
 
 @pytest.mark.integration
+def test_server_insert_failure_exposes_safe_diagnostic(
+    clickhouse_client: Any, table_name: str, connection_options: dict[str, object]
+) -> None:
+    clickhouse_client.command(
+        f"CREATE TABLE `{DATABASE}`.`{table_name}` "
+        "(id Int64, CONSTRAINT positive CHECK id > 0) ENGINE = MergeTree ORDER BY id"
+    )
+    connection = ClickHouseConnection(
+        host=str(connection_options["host"]),
+        port=int(connection_options["port"]),
+        database=DATABASE,
+        username=str(connection_options["username"]),
+        password=str(connection_options["password"]),
+    )
+    session = ClickHouseInsertSession(
+        connection,
+        ResourceLimits(),
+        database=DATABASE,
+        table=table_name,
+        insert_mode="sync",
+    )
+    session.start()
+    try:
+        with pytest.raises(RayClickHouseError) as raised:
+            session.insert(pa.table({"id": [-1]}))
+        diagnostic = raised.value.client_diagnostic
+        assert diagnostic["operation"] == "Arrow insert"
+        assert diagnostic["exception_type"].startswith("clickhouse_connect.")
+        assert diagnostic["message"] == "client message omitted"
+    finally:
+        session.close()
+
+
+@pytest.mark.integration
 def test_read_permission_failure_is_not_silently_downgraded(
     clickhouse_client: Any, table_name: str, connection_options: dict[str, object]
 ) -> None:
@@ -654,11 +693,15 @@ def test_read_permission_failure_is_not_silently_downgraded(
     clickhouse_client.command(f"CREATE USER `{username}` IDENTIFIED WITH no_password")
     try:
         no_select_options = {**connection_options, "username": username}
-        with pytest.raises(PermissionError):
+        with pytest.raises(PermissionError) as raised:
             _read_rows(
                 **no_select_options,
                 table=table_name,
                 columns=("id",),
             )
+        assert raised.value.client_diagnostic["operation"] == "schema discovery"
+        assert raised.value.client_diagnostic["exception_type"].startswith(
+            "clickhouse_connect."
+        )
     finally:
         clickhouse_client.command(f"DROP USER IF EXISTS `{username}`")

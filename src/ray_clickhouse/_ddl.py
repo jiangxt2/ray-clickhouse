@@ -15,6 +15,7 @@ from ray_clickhouse._errors import (
     ConfigurationError,
     RayClickHouseError,
     SchemaError,
+    _attach_client_failure,
 )
 from ray_clickhouse._models import (
     ClickHouseConnection,
@@ -227,20 +228,28 @@ def create_or_replace_table(
         logger.debug("ClickHouse table create confirmed")
     except AmbiguousTableManagementError:
         raise
-    except RayClickHouseError:
+    except RayClickHouseError as exc:
         if drop_started:
-            raise AmbiguousTableManagementError(
-                f"ClickHouse overwrite for {table} may have dropped the old table "
-                "without confirming the replacement"
+            raise _attach_client_failure(
+                AmbiguousTableManagementError(
+                    f"ClickHouse overwrite for {table} may have dropped the old table "
+                    "without confirming the replacement"
+                ),
+                exc,
+                "overwrite table",
             ) from None
         raise
     except BaseException as exc:
         if isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit)):
             raise
         if drop_started:
-            raise AmbiguousTableManagementError(
-                f"ClickHouse overwrite for {table} may have dropped the old table "
-                "without confirming the replacement"
+            raise _attach_client_failure(
+                AmbiguousTableManagementError(
+                    f"ClickHouse overwrite for {table} may have dropped the old table "
+                    "without confirming the replacement"
+                ),
+                exc,
+                "overwrite table",
             ) from None
         raise _translate(exc, operation=f"{mode} table") from None
     finally:
